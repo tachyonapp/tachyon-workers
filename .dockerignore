@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Environment (NEVER include in image)
+.env
+.env.*
+*.pem
+*.key
+
+# Source control
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Tests
+__tests__/
+*.test.ts
+*.spec.ts
+coverage/
+jest.config.*
+
+# Documentation
+*.md
+LICENSE
+
+# CI/CD
+.github/
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
