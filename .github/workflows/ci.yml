@@ -48,6 +48,17 @@ jobs:
             ghcr.io/tachyonapp/tachyon-workers:${{ github.sha }}
             ghcr.io/tachyonapp/tachyon-workers:latest
 
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/tachyonapp/tachyon-workers:${{ github.sha }}
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+          vuln-type: "os"
+          skip-dirs: /tmp,/var/cache,/var/tmp,**/node_modules
+          skip-files: LICENSE,README.md,.gitignore
+
   check-lockfile:
     runs-on: ubuntu-latest
     steps:
