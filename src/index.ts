@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   process.on("SIGINT", shutdown);
 
   console.log(
-    `Heartbeat active. Writing to Redis every ${HEARTBEAT_INTERVAL_MS / 1000}s`
+    `Heartbeat active. Writing to ValKey every ${HEARTBEAT_INTERVAL_MS / 1000}s`,
   );
 }
 
