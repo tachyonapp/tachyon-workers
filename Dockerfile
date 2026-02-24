@@ -20,7 +20,7 @@ ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
     
 USER appuser
     
-# No HEALTHCHECK -- workers monitored by process status and Redis heartbeat
+# No HEALTHCHECK -- workers monitored by process status and ValKey heartbeat
 # No EXPOSE -- workers don't serve HTTP
     
 CMD ["node", "dist/index.js"]
