@@ -51,6 +51,8 @@ jobs:
           push: true
           build-args: |
             GIT_COMMIT_SHA=${{ github.sha }}
+          secrets: |
+            node_auth_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             ghcr.io/tachyonapp/tachyon-workers:${{ github.sha }}
             ghcr.io/tachyonapp/tachyon-workers:latest
