@@ -19,9 +19,16 @@ jobs:
         with:
           node-version: 20
           cache: "npm"
-      - run: npm ci
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@tachyonapp"
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run lint
       - run: npm test
+      - name: Type check
+        run: npx tsc --noEmit
 
   build-and-push:
     needs: lint-and-test
