@@ -75,8 +75,8 @@ A 30-second hard timeout is enforced on step 2. DigitalOcean App Platform sends 
 
 | Queue | Attempts | Backoff type | Base delay |
 |---|---|---|---|
-| `scan:dispatch` | 3 | exponential | 5,000 ms |
-| `scan:bot` | 3 | exponential | 5,000 ms |
+| `scan-dispatch` | 3 | exponential | 5,000 ms |
+| `scan-bot` | 3 | exponential | 5,000 ms |
 | `expiry` | 5 | exponential | 2,000 ms |
 | `reconciliation` | 5 | exponential | 10,000 ms |
 | `notification` | 4 | exponential | 5,000 ms |
@@ -88,14 +88,14 @@ All queues use `removeOnComplete: { count: 1000 }` and `removeOnFail: { count: 5
 
 | Worker | Concurrency | Trigger | Cron (UTC) | Notes |
 |---|---|---|---|---|
-| `scan:dispatch` | 1 | Cron | `*/15 14-21 * * 1-5` | Market-hours guard runs first; no-op outside 9:30 AM–4:00 PM ET. Fan-out: enqueues one `scan:bot` job per active bot via a single `addBulk()` call |
-| `scan:bot` | `BULLMQ_CONCURRENCY` (default 5) | On-demand | — | Enqueued by `scan:dispatch`. Re-validates bot ownership and broker connection before proceeding |
+| `scan-dispatch` | 1 | Cron | `*/15 14-21 * * 1-5` | Market-hours guard runs first; no-op outside 9:30 AM–4:00 PM ET. Fan-out: enqueues one `scan-bot` job per active bot via a single `addBulk()` call |
+| `scan-bot` | `BULLMQ_CONCURRENCY` (default 5) | On-demand | — | Enqueued by `scan-dispatch`. Re-validates bot ownership and broker connection before proceeding |
 | `expiry` | `BULLMQ_CONCURRENCY` (default 5) | Cron | `* * * * *` | 24/7 — proposals expire by wall-clock time, not market session |
 | `reconciliation` | 1 | Cron | `*/5 * * * *` | 24/7 — kept at concurrency 1 to avoid redundant concurrent writes |
 | `notification` | `BULLMQ_CONCURRENCY` (default 5) | On-demand | — | Event-driven; enqueued by the API or other workers on trade/funding events |
 | `summary` | 1 | Cron | `5 21 * * 1-5` | 21:05 UTC = safely post-close in both EST and EDT. Generates EOD bot reports |
 
-`scan:bot` and `notification` are not cron-scheduled — they are enqueued on demand only.
+`scan-bot` and `notification` are not cron-scheduled — they are enqueued on demand only.
 
 ## Environment Variables
 
@@ -107,7 +107,7 @@ All queues use `removeOnComplete: { count: 1000 }` and `removeOnFail: { count: 5
 | `VALKEY_PORT` | No | `6379` | Valkey port |
 | `VALKEY_PASSWORD` | No | — | Valkey auth password (empty = no auth, typical for local dev) |
 | `VALKEY_TLS` | No | `false` | Set to `true` to enable TLS (required for DigitalOcean managed Valkey) |
-| `BULLMQ_CONCURRENCY` | No | `5` | Per-process job concurrency for `scan:bot`, `expiry`, and `notification` workers |
+| `BULLMQ_CONCURRENCY` | No | `5` | Per-process job concurrency for `scan-bot`, `expiry`, and `notification` workers |
 | `SENTRY_DSN` | No | — | Sentry DSN for error capture. Absent = Sentry disabled (local dev) |
 | `NODE_ENV` | No | `development` | Passed to Sentry for environment tagging (`staging`, `production`) |
 

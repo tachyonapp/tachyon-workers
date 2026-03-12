@@ -2,7 +2,7 @@
 // =============================================================================
 // PURPOSE
 // =============================================================================
-// This utility guards the `scan:dispatch` and `summary` worker processors against
+// This utility guards the `scan-dispatch` and `summary` worker processors against
 // running outside NYSE trading hours. It uses `luxon` with the IANA
 // `'America/New_York'` timezone for automatic EST/EDT handling. Market hours
 // are Mon–Fri, 9:30 AM – 4:00 PM ET.
