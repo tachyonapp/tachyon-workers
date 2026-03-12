@@ -13,7 +13,7 @@
  * so this is the only way to manually flush job history if it piles up unexpectedly
  *
  * - After a runaway bug or major incident — if a bug caused thousands of failed jobs
- * to accumulate (e.g., a bad deploy that caused every scan:bot job to fail for hours),
+ * to accumulate (e.g., a bad deploy that caused every scan-bot job to fail for hours),
  * this clears the noise so you can see the current state clearly
  *
  * - Storage pressure — BullMQ's removeOnComplete: { count: 1000 } and removeOnFail: { count: 500 }

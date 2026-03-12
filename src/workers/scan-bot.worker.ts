@@ -1,7 +1,7 @@
 /**
  * Per-Bot Scan Worker
  *
- * Role: "Individual bot scanner" — processes one scan:bot job per bot.
+ * Role: "Individual bot scanner" — processes one scan-bot job per bot.
  * Jobs are enqueued in bulk by scan-dispatch.worker.ts each cron tick.
  * This worker does NOT run market-hours check itself; scan-dispatch already
  * guards the entire fan-out and would not have enqueued these jobs if the
@@ -20,7 +20,7 @@
  * If either check fails, the job returns early as a safe no-op — no error,
  * no retry, no Sentry alert. Stale jobs are expected and benign.
  *
- * Concurrency: BULLMQ_CONCURRENCY (default 5) — multiple scan:bot jobs can
+ * Concurrency: BULLMQ_CONCURRENCY (default 5) — multiple scan-bot jobs can
  * run in parallel within a single worker process. Each job is isolated to its
  * own bot, so there is no shared state between concurrent executions.
  *

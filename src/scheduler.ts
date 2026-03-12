@@ -26,7 +26,7 @@ export async function registerScheduledJobs(): Promise<void> {
     },
   );
 
-  // NOTE scan:bot is NOT cron-scheduled — enqueued by the scan:dispatch dispatcher
+  // NOTE scan-bot is NOT cron-scheduled — enqueued by the scan-dispatch dispatcher
 
   await expiryQueue.upsertJobScheduler(
     "expiry-cron",
@@ -67,7 +67,7 @@ export async function registerScheduledJobs(): Promise<void> {
     JSON.stringify({
       level: "info",
       event: "scheduler.registered",
-      queues: ["scan:dispatch", "expiry", "reconciliation", "summary"],
+      queues: ["scan-dispatch", "expiry", "reconciliation", "summary"],
     }),
   );
 }
