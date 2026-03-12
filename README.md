@@ -60,3 +60,5 @@ npm run lint      # Run ESLint
 | `reconciliation` | 5 | exponential | 10,000 ms |
 | `notification` | 4 | exponential | 5,000 ms |
 | `summary` | 3 | exponential | 30,000 ms |
+
+**Workers configuration reference:**

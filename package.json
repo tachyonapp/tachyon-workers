@@ -16,13 +16,16 @@
         "@tachyonapp/tachyon-queue-types": "^1.0.0",
         "bullmq": "^5.71.0",
         "ioredis": "^5.4.0",
-        "luxon": "^3.7.2"
+        "kysely": "^0.28.11",
+        "luxon": "^3.7.2",
+        "pg": "^8.20.0"
     },
     "devDependencies": {
         "@eslint/js": "^9.39.2",
         "@types/jest": "^29.5.0",
         "@types/luxon": "^3.7.1",
         "@types/node": "^22.0.0",
+        "@types/pg": "^8.18.0",
         "@typescript-eslint/eslint-plugin": "^8.0.0",
         "@typescript-eslint/parser": "^8.0.0",
         "eslint": "^9.39.2",
