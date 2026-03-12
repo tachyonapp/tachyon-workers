@@ -1,6 +1,6 @@
 // Heartbeat unit tests. These verify the module's exports and types.
 // Integration tests with ValKey run via docker-compose.test.yml.
-import { createHeartbeat, stopHeartbeat } from "../../heartbeat";
+import { createHeartbeat, stopHeartbeat } from "../heartbeat";
 
 describe("heartbeat", () => {
   it("exports createHeartbeat function", () => {

@@ -7,12 +7,17 @@
  *
  */
 
-import { Worker } from "bullmq";
+// Minimal interface — gracefulShutdown only calls close() on each worker.
+// Using a structural interface instead of the concrete BullMQ Worker class
+// keeps the signature testable without casting mocks to `any`.
+interface Closeable {
+  close(): Promise<void>;
+}
 
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
 export async function gracefulShutdown(
-  workers: Worker[],
+  workers: Closeable[],
   onTimeout?: () => void,
 ): Promise<void> {
   console.log(
