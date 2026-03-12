@@ -46,3 +46,17 @@ npm run build     # Compile TypeScript
 npm test          # Run Jest tests
 npm run lint      # Run ESLint
 ```
+
+
+## BullMQ
+
+**Queue configuration reference:**
+
+| Queue | Attempts | Backoff type | Base delay |
+|---|---|---|---|
+| `scan:dispatch` | 3 | exponential | 5,000 ms |
+| `scan:bot` | 3 | exponential | 5,000 ms |
+| `expiry` | 5 | exponential | 2,000 ms |
+| `reconciliation` | 5 | exponential | 10,000 ms |
+| `notification` | 4 | exponential | 5,000 ms |
+| `summary` | 3 | exponential | 30,000 ms |
