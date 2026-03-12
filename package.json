@@ -12,6 +12,7 @@
     },
     "dependencies": {
         "@tachyonapp/tachyon-db": "^0.1.0",
+        "@tachyonapp/tachyon-queue-types": "^1.0.0",
         "ioredis": "^5.4.0"
     },
     "devDependencies": {
