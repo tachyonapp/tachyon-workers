@@ -2,6 +2,7 @@
 
 # --- Build Stage ---
 FROM node:20-alpine AS builder
+RUN apk upgrade --no-cache
 WORKDIR /app
 COPY .npmrc package.json package-lock.json ./
 # NODE_AUTH_TOKEN is mounted as a BuildKit secret — never written to any image layer.
@@ -14,7 +15,7 @@ RUN npm run build
 
 # --- Production Stage ---
 FROM node:20-alpine AS production
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN apk upgrade --no-cache && addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 COPY .npmrc package.json package-lock.json ./
 # NODE_AUTH_TOKEN is mounted as a BuildKit secret — never written to any image layer.
