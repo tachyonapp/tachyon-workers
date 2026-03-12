@@ -1,41 +1,42 @@
 {
-    "name": "tachyon-workers",
-    "version": "0.1.0",
-    "description": "Tachyon Worker Services - Background job processing",
-    "private": true,
-    "scripts": {
-        "build": "tsc",
-        "start": "node dist/index.js",
-        "dev": "tsx watch src/index.ts",
-        "test": "jest --detectOpenHandles",
-        "lint": "eslint src/"
-    },
-    "dependencies": {
-        "@sentry/node": "^10.43.0",
-        "@tachyonapp/tachyon-db": "^0.1.0",
-        "@tachyonapp/tachyon-queue-types": "^1.0.0",
-        "bullmq": "^5.71.0",
-        "ioredis": "^5.4.0",
-        "kysely": "^0.28.11",
-        "luxon": "^3.7.2",
-        "pg": "^8.20.0"
-    },
-    "devDependencies": {
-        "@eslint/js": "^9.39.2",
-        "@types/jest": "^29.5.0",
-        "@types/luxon": "^3.7.1",
-        "@types/node": "^22.0.0",
-        "@types/pg": "^8.18.0",
-        "@typescript-eslint/eslint-plugin": "^8.0.0",
-        "@typescript-eslint/parser": "^8.0.0",
-        "eslint": "^9.39.2",
-        "globals": "^17.3.0",
-        "jest": "^29.7.0",
-        "jiti": "^2.6.1",
-        "ts-jest": "^29.2.0",
-        "ts-node": "^10.9.2",
-        "tsx": "^4.19.0",
-        "typescript": "^5.7.0",
-        "typescript-eslint": "^8.55.0"
-    }
+  "name": "tachyon-workers",
+  "version": "0.1.0",
+  "description": "Tachyon Worker Services - Background job processing",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test": "jest --detectOpenHandles",
+    "lint": "eslint src/",
+    "queue:clean": "npx tsx scripts/queue-clean.ts"
+  },
+  "dependencies": {
+    "@sentry/node": "^10.43.0",
+    "@tachyonapp/tachyon-db": "^0.1.0",
+    "@tachyonapp/tachyon-queue-types": "^1.0.0",
+    "bullmq": "^5.71.0",
+    "ioredis": "^5.4.0",
+    "kysely": "^0.28.11",
+    "luxon": "^3.7.2",
+    "pg": "^8.20.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/jest": "^29.5.0",
+    "@types/luxon": "^3.7.1",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.18.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.39.2",
+    "globals": "^17.3.0",
+    "jest": "^29.7.0",
+    "jiti": "^2.6.1",
+    "ts-jest": "^29.2.0",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.55.0"
+  }
 }
