@@ -74,6 +74,15 @@ npm run lint      # Run ESLint
 
 All queues use `removeOnComplete: { count: 1000 }` and `removeOnFail: { count: 500 }`.
 
+**Cron schedule reference:**
+
+| Queue | Cron (UTC) | Notes |
+|---|---|---|
+| `scan:dispatch` | `*/15 14-21 * * 1-5` | Mon–Fri; job-level market hours guard handles 9:30 boundary |
+| `expiry` | `* * * * *` | Every minute, 24/7 |
+| `reconciliation` | `*/5 * * * *` | Every 5 min, 24/7 |
+| `summary` | `5 21 * * 1-5` | Mon–Fri; 21:05 UTC = post-close in both EST and EDT |
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
