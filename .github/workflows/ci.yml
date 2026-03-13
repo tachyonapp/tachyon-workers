@@ -25,6 +25,16 @@ jobs:
         run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
+      - name: Check @tachyonapp/tachyon-queue-types is up to date
+        run: |
+          OUTDATED=$(npm outdated @tachyonapp/tachyon-queue-types --json || true)
+          if [ -n "$OUTDATED" ] && [ "$OUTDATED" != "{}" ]; then
+            echo "ERROR: @tachyonapp/tachyon-queue-types is outdated. Run 'npm install @tachyonapp/tachyon-queue-types@latest' and commit the updated package-lock.json."
+            echo "$OUTDATED"
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
       - run: npm run lint
       - run: npm test
       - name: Type check
@@ -55,7 +65,6 @@ jobs:
             node_auth_token=${{ secrets.NODE_AUTH_TOKEN }}
           tags: |
             ghcr.io/tachyonapp/tachyon-workers:${{ github.sha }}
-            ghcr.io/tachyonapp/tachyon-workers:latest
 
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@master
