@@ -19,7 +19,7 @@ import type {
 export async function registerScheduledJobs(): Promise<void> {
   await scanDispatchQueue.upsertJobScheduler(
     "scan-dispatch-cron",
-    { pattern: "*/15 14-21 * * 1-5" },
+    { pattern: "*/5 14-21 * * 1-5" },
     {
       name: "scan-dispatch",
       data: { triggeredAt: new Date().toISOString() } as ScanDispatchJobPayload,
