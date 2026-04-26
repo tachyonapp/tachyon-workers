@@ -4,6 +4,7 @@ import { expiryQueue } from "./expiry.queue";
 import { reconciliationQueue } from "./reconciliation.queue";
 import { notificationQueue } from "./notification.queue";
 import { summaryQueue } from "./summary.queue";
+import { resetAiCountersQueue } from "./reset-ai-counters.queue";
 
 // Named exports — for callers that need a specific queue by name
 // (e.g. scheduler.ts registering crons, scan-dispatch.worker.ts fanning out to scan-bot)
@@ -13,6 +14,7 @@ export { expiryQueue } from "./expiry.queue";
 export { reconciliationQueue } from "./reconciliation.queue";
 export { notificationQueue } from "./notification.queue";
 export { summaryQueue } from "./summary.queue";
+export { resetAiCountersQueue } from "./reset-ai-counters.queue";
 
 // Array export — for callers that need to iterate over all queues without caring which is which
 // (e.g. queue-clean.ts flushing all queues, Bull Board dashboard registering all adapters)
@@ -23,4 +25,5 @@ export const allQueues = [
   reconciliationQueue,
   notificationQueue,
   summaryQueue,
+  resetAiCountersQueue,
 ] as const;
