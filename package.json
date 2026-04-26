@@ -12,9 +12,10 @@
     "queue:clean": "npx tsx scripts/queue-clean.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
     "@sentry/node": "^10.43.0",
-    "@tachyonapp/tachyon-db": "^0.2.7",
-    "@tachyonapp/tachyon-queue-types": "^1.0.3",
+    "@tachyonapp/tachyon-db": "^0.2.8",
+    "@tachyonapp/tachyon-queue-types": "^1.0.4",
     "bullmq": "^5.71.0",
     "ioredis": "^5.4.0",
     "kysely": "^0.28.11",
