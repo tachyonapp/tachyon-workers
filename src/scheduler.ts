@@ -1,3 +1,5 @@
+import { resetAiCountersQueue } from "./queues";
+import type { ResetAiCountersJobPayload } from "@tachyonapp/tachyon-queue-types";
 import { scanDispatchQueue } from "./queues/scan-dispatch.queue";
 import { expiryQueue } from "./queues/expiry.queue";
 import { reconciliationQueue } from "./queues/reconciliation.queue";
@@ -8,6 +10,10 @@ import type {
   ReconciliationJobPayload,
   SummaryJobPayload,
 } from "@tachyonapp/tachyon-queue-types";
+import { QUEUE_NAMES } from "@tachyonapp/tachyon-queue-types";
+
+const { SCAN_DISPATCH, RESET_AI_COUNTERS, EXPIRY, SUMMARY, RECONCILIATION } =
+  QUEUE_NAMES;
 
 /**
  * Register all recurring cron jobs.
@@ -21,7 +27,7 @@ export async function registerScheduledJobs(): Promise<void> {
     "scan-dispatch-cron",
     { pattern: "*/5 14-21 * * 1-5" },
     {
-      name: "scan-dispatch",
+      name: SCAN_DISPATCH,
       data: { triggeredAt: new Date().toISOString() } as ScanDispatchJobPayload,
     },
   );
@@ -32,7 +38,7 @@ export async function registerScheduledJobs(): Promise<void> {
     "expiry-cron",
     { pattern: "* * * * *" },
     {
-      name: "expiry",
+      name: EXPIRY,
       data: { triggeredAt: new Date().toISOString() } as ExpiryJobPayload,
     },
   );
@@ -41,7 +47,7 @@ export async function registerScheduledJobs(): Promise<void> {
     "reconciliation-cron",
     { pattern: "*/5 * * * *" },
     {
-      name: "reconciliation",
+      name: RECONCILIATION,
       data: {
         triggeredAt: new Date().toISOString(),
         scope: "full",
@@ -55,7 +61,7 @@ export async function registerScheduledJobs(): Promise<void> {
     "summary-cron",
     { pattern: "5 21 * * 1-5" },
     {
-      name: "summary",
+      name: SUMMARY,
       data: {
         triggeredAt: new Date().toISOString(),
         scope: "eod",
@@ -63,11 +69,29 @@ export async function registerScheduledJobs(): Promise<void> {
     },
   );
 
+  // 05:00 UTC = midnight ET (standard time). During EDT, fires at 01:00 ET — acceptable for MVP.
+  await resetAiCountersQueue.upsertJobScheduler(
+    "reset-ai-counters-cron",
+    { pattern: "0 5 * * 1-5" },
+    {
+      name: RESET_AI_COUNTERS,
+      data: {
+        triggeredAt: new Date().toISOString(),
+      } as ResetAiCountersJobPayload,
+    },
+  );
+
   console.log(
     JSON.stringify({
       level: "info",
       event: "scheduler.registered",
-      queues: ["scan-dispatch", "expiry", "reconciliation", "summary"],
+      queues: [
+        SCAN_DISPATCH,
+        EXPIRY,
+        RECONCILIATION,
+        SUMMARY,
+        RESET_AI_COUNTERS,
+      ],
     }),
   );
 }

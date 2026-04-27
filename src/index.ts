@@ -43,6 +43,7 @@ import { expiryWorker } from "./workers/expiry.worker";
 import { reconciliationWorker } from "./workers/reconciliation.worker";
 import { notificationWorker } from "./workers/notification.worker";
 import { summaryWorker } from "./workers/summary.worker";
+import { resetAiCountersWorker } from "./workers/reset-ai-counters.worker";
 
 import { registerScheduledJobs } from "./scheduler";
 import { gracefulShutdown } from "./shutdown";
@@ -58,6 +59,7 @@ const allWorkers = [
   reconciliationWorker,
   notificationWorker,
   summaryWorker,
+  resetAiCountersWorker,
 ];
 
 async function main(): Promise<void> {
@@ -68,6 +70,18 @@ async function main(): Promise<void> {
       instanceId: INSTANCE_ID,
     }),
   );
+
+  // Anthropic key validation
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error(
+      JSON.stringify({
+        level: "fatal",
+        event: "startup.failed",
+        error: "ANTHROPIC_API_KEY is required for the Tachyon-hosted brain",
+      }),
+    );
+    process.exit(1);
+  }
 
   // Start the heartbeat — writes a TTL'd key to Valkey every 30 s so the
   // infrastructure layer can detect whether this worker process is alive.
