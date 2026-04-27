@@ -23,10 +23,26 @@ export interface BrainCallInput {
 }
 
 export type BrainCallResult =
-  | { ok: true; content: string; provider: string; modelId: string; latencyMs: number }
-  | { ok: false; reason: "CAP_EXCEEDED" | "NO_BRAIN_CONFIG" | "PROVIDER_ERROR" | "DECRYPTION_ERROR"; detail?: string };
+  | {
+      ok: true;
+      content: string;
+      provider: string;
+      modelId: string;
+      latencyMs: number;
+    }
+  | {
+      ok: false;
+      reason:
+        | "CAP_EXCEEDED"
+        | "NO_BRAIN_CONFIG"
+        | "PROVIDER_ERROR"
+        | "DECRYPTION_ERROR";
+      detail?: string;
+    };
 
-export async function callBrain(input: BrainCallInput): Promise<BrainCallResult> {
+export async function callBrain(
+  input: BrainCallInput,
+): Promise<BrainCallResult> {
   const { botId, userId, prompt, maxTokens = 512 } = input;
 
   // 1. Fetch active brain config
@@ -64,7 +80,12 @@ export async function callBrain(input: BrainCallInput): Promise<BrainCallResult>
 
   try {
     if (brainConfig.brain_type === "TACHYON_HOSTED") {
-      content = await callAnthropic(tachyonAnthropic, brainConfig.model_id, prompt, maxTokens);
+      content = await callAnthropic(
+        tachyonAnthropic,
+        brainConfig.model_id,
+        prompt,
+        maxTokens,
+      );
     } else {
       // BYOK — Anthropic only in MVP
       let rawKey: string;
@@ -76,10 +97,19 @@ export async function callBrain(input: BrainCallInput): Promise<BrainCallResult>
 
       if (brainConfig.provider === "anthropic") {
         const byokClient = new Anthropic({ apiKey: rawKey, timeout: 15_000 });
-        content = await callAnthropic(byokClient, brainConfig.model_id, prompt, maxTokens);
+        content = await callAnthropic(
+          byokClient,
+          brainConfig.model_id,
+          prompt,
+          maxTokens,
+        );
         // rawKey goes out of scope here
       } else {
-        return { ok: false, reason: "PROVIDER_ERROR", detail: `Unsupported provider: ${brainConfig.provider}` };
+        return {
+          ok: false,
+          reason: "PROVIDER_ERROR",
+          detail: `Unsupported provider: ${brainConfig.provider}`,
+        };
       }
     }
   } catch (err) {
@@ -88,14 +118,24 @@ export async function callBrain(input: BrainCallInput): Promise<BrainCallResult>
 
     try {
       await writeUsageLog({
-        botId, userId, today,
+        botId,
+        userId,
+        today,
         provider: brainConfig.provider ?? "anthropic",
         modelId: brainConfig.model_id,
         costCategory: brainConfig.brain_type,
-        latencyMs, success: false, errorCode,
+        latencyMs,
+        success: false,
+        errorCode,
       });
     } catch (logErr) {
-      console.error(JSON.stringify({ level: "error", event: "brain.usage_log.write_failed", error: String(logErr) }));
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "brain.usage_log.write_failed",
+          error: String(logErr),
+        }),
+      );
     }
 
     return { ok: false, reason: "PROVIDER_ERROR", detail: errorCode };
@@ -110,33 +150,50 @@ export async function callBrain(input: BrainCallInput): Promise<BrainCallResult>
         .insertInto("bot_runtime_data")
         .values({
           bot_id: botId,
-          trading_day: today,
+          trading_day: new Date(today),
           ai_calls_today: 1,
         })
         .onConflict((oc) =>
           oc.columns(["bot_id", "trading_day"]).doUpdateSet({
             ai_calls_today: sql<number>`bot_runtime_data.ai_calls_today + 1`,
             updated_at: new Date(),
-          })
+          }),
         )
         .execute();
     } catch (err) {
       // Log but do not discard the successful AI response
-      console.error(JSON.stringify({ level: "error", event: "brain.counter.increment_failed", botId, error: String(err) }));
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "brain.counter.increment_failed",
+          botId,
+          error: String(err),
+        }),
+      );
     }
   }
 
   // 5. Write usage log (success path)
   try {
     await writeUsageLog({
-      botId, userId, today,
+      botId,
+      userId,
+      today,
       provider: brainConfig.provider ?? "anthropic",
       modelId: brainConfig.model_id,
       costCategory: brainConfig.brain_type,
-      latencyMs, success: true, errorCode: undefined,
+      latencyMs,
+      success: true,
+      errorCode: undefined,
     });
   } catch (err) {
-    console.error(JSON.stringify({ level: "error", event: "brain.usage_log.write_failed", error: String(err) }));
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "brain.usage_log.write_failed",
+        error: String(err),
+      }),
+    );
   }
 
   return {
@@ -155,8 +212,13 @@ export function getTradingDay(): string {
 }
 
 export function classifyProviderError(err: unknown): string {
-  if (err instanceof Anthropic.APIError) return `anthropic_${err.status ?? "unknown"}`;
-  if (err instanceof Error && (err.message.includes("timeout") || err.message.includes("timed out"))) return "timeout";
+  if (err instanceof Anthropic.APIError)
+    return `anthropic_${err.status ?? "unknown"}`;
+  if (
+    err instanceof Error &&
+    (err.message.includes("timeout") || err.message.includes("timed out"))
+  )
+    return "timeout";
   return "unknown";
 }
 
@@ -174,7 +236,8 @@ async function callAnthropic(
     messages: [{ role: "user", content: prompt }],
   });
   const block = message.content[0];
-  if (block?.type !== "text") throw new Error("Anthropic returned non-text content block");
+  if (block?.type !== "text")
+    throw new Error("Anthropic returned non-text content block");
   return block.text;
 }
 
