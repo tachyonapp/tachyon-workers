@@ -156,7 +156,7 @@ export function getTradingDay(): string {
 
 export function classifyProviderError(err: unknown): string {
   if (err instanceof Anthropic.APIError) return `anthropic_${err.status ?? "unknown"}`;
-  if (err instanceof Error && err.message.includes("timeout")) return "timeout";
+  if (err instanceof Error && (err.message.includes("timeout") || err.message.includes("timed out"))) return "timeout";
   return "unknown";
 }
 
