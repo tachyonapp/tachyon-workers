@@ -15,7 +15,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@sentry/node": "^10.43.0",
-    "@tachyonapp/tachyon-db": "^0.3.0",
+    "@tachyonapp/tachyon-db": "^0.3.1",
     "@tachyonapp/tachyon-queue-types": "^1.0.5",
     "bullmq": "^5.71.0",
     "ioredis": "^5.4.0",
