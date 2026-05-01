@@ -120,6 +120,7 @@ describe("callBrain() integration", () => {
       botId,
       userId,
       prompt: "Explain this trade",
+      dailyCap: DAILY_CAP,
     });
 
     expect(result).toMatchObject({ ok: true, content: "Test explanation" });
@@ -166,6 +167,7 @@ describe("callBrain() integration", () => {
       botId,
       userId,
       prompt: "Explain this trade",
+      dailyCap: null,
     });
 
     expect(result).toMatchObject({ ok: true, content: "BYOK response" });
@@ -215,6 +217,7 @@ describe("callBrain() integration", () => {
       botId,
       userId,
       prompt: "Explain this trade",
+      dailyCap: DAILY_CAP,
     });
 
     expect(result).toEqual({ ok: false, reason: "CAP_EXCEEDED" });

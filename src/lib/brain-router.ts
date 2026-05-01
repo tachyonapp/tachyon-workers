@@ -4,8 +4,6 @@ import { sql } from "kysely";
 import { db } from "../db";
 import { decrypt } from "./crypto";
 
-const DAILY_CAP = parseInt(process.env.TACHYON_BRAIN_DAILY_CAP ?? "10", 10);
-
 // Module-level client for Tachyon-hosted calls only.
 // BYOK SDK instances are created per-call and must NOT be module-level.
 const tachyonAnthropic = new Anthropic({
@@ -20,6 +18,7 @@ export interface BrainCallInput {
   userId: string;
   prompt: string;
   maxTokens?: number; // default: 512
+  dailyCap: number | null; // null = no cap (BYOK); number = enforce cap against ai_calls_today
 }
 
 export type BrainCallResult =
@@ -43,7 +42,7 @@ export type BrainCallResult =
 export async function callBrain(
   input: BrainCallInput,
 ): Promise<BrainCallResult> {
-  const { botId, userId, prompt, maxTokens = 512 } = input;
+  const { botId, userId, prompt, maxTokens = 512, dailyCap } = input;
 
   // 1. Fetch active brain config
   const brainConfig = await db
@@ -59,8 +58,8 @@ export async function callBrain(
 
   const today = getTradingDay();
 
-  // 2. Cap check for TACHYON_HOSTED — read-then-gate (not atomic; max overrun = concurrency-1)
-  if (brainConfig.brain_type === "TACHYON_HOSTED") {
+  // 2. Cap check — read-then-gate (not atomic; max overrun = concurrency-1)
+  if (dailyCap !== null) {
     const runtimeRow = await db
       .selectFrom("bot_runtime_data")
       .select("ai_calls_today")
@@ -69,7 +68,7 @@ export async function callBrain(
       .executeTakeFirst();
 
     const callsToday = runtimeRow?.ai_calls_today ?? 0;
-    if (callsToday >= DAILY_CAP) {
+    if (callsToday >= dailyCap) {
       return { ok: false, reason: "CAP_EXCEEDED" };
     }
   }
@@ -143,8 +142,8 @@ export async function callBrain(
 
   const latencyMs = Date.now() - startMs;
 
-  // 4. Post-success: increment counter (TACHYON_HOSTED only)
-  if (brainConfig.brain_type === "TACHYON_HOSTED") {
+  // 4. Post-success: increment counter when cap applies
+  if (dailyCap !== null) {
     try {
       await db
         .insertInto("bot_runtime_data")
