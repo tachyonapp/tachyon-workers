@@ -92,9 +92,48 @@ export const scanBotWorker = new Worker<ScanBotJobPayload>(
       return;
     }
 
-    // Both guards passed — the bot is active and has a broker connection.
-    // TODO:: universe filtering → scoring → proposal construction.
+    // Step 3 — Fetch subscription tier to resolve the tier-aware daily AI call cap.
+    // Always read from DB — never trust cache or job payload for billing-sensitive data.
+    const subscription = await db
+      .selectFrom("user_subscriptions")
+      .where("user_id", "=", userId)
+      .select("tier")
+      .executeTakeFirst();
+
+    if (!subscription) {
+      console.log(
+        JSON.stringify({
+          level: "info",
+          event: "scan.bot.noop",
+          reason: "no_subscription",
+          botId,
+          userId,
+          jobId: job.id,
+        }),
+      );
+      return;
+    }
+
+    let dailyCap: number | null;
+    switch (subscription.tier) {
+      case "FREE_TRIAL":
+        dailyCap = 40;
+        break;
+      case "TACHYON_HOSTED":
+        dailyCap = 78;
+        break;
+      case "BYOK":
+        dailyCap = null; // no cap — user's own API key
+        break;
+      default:
+        dailyCap = 40; // safe default
+    }
+
+    // Both guards passed and cap resolved — bot is active, has a broker connection,
+    // and has a subscription tier.
+    // TODO:: universe filtering → scoring → proposal construction → build prompt string.
     // The full trading pipeline will be implemented in the trading-domain TDD.
+    // When wired up, call: await callBrain({ botId, userId, prompt, dailyCap })
     console.log(
       JSON.stringify({
         level: "info",
@@ -103,6 +142,8 @@ export const scanBotWorker = new Worker<ScanBotJobPayload>(
         userId,
         botName: bot.name,
         brokerProvider: brokerConn.provider_name,
+        subscriptionTier: subscription.tier,
+        dailyCap,
         jobId: job.id,
       }),
     );
