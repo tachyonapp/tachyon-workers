@@ -4,16 +4,24 @@ import { scanDispatchQueue } from "./queues/scan-dispatch.queue";
 import { expiryQueue } from "./queues/expiry.queue";
 import { reconciliationQueue } from "./queues/reconciliation.queue";
 import { summaryQueue } from "./queues/summary.queue";
+import { trialExpiryCheckQueue } from "./queues/trial-expiry-check.queue";
 import type {
   ScanDispatchJobPayload,
   ExpiryJobPayload,
   ReconciliationJobPayload,
   SummaryJobPayload,
+  TrialExpiryCheckJobPayload,
 } from "@tachyonapp/tachyon-queue-types";
 import { QUEUE_NAMES } from "@tachyonapp/tachyon-queue-types";
 
-const { SCAN_DISPATCH, RESET_AI_COUNTERS, EXPIRY, SUMMARY, RECONCILIATION } =
-  QUEUE_NAMES;
+const {
+  SCAN_DISPATCH,
+  RESET_AI_COUNTERS,
+  EXPIRY,
+  SUMMARY,
+  RECONCILIATION,
+  TRIAL_EXPIRY_CHECK,
+} = QUEUE_NAMES;
 
 /**
  * Register all recurring cron jobs.
@@ -81,6 +89,18 @@ export async function registerScheduledJobs(): Promise<void> {
     },
   );
 
+  // 00:05 UTC daily — checks FREE_TRIAL subscriptions and transitions expired ones.
+  await trialExpiryCheckQueue.upsertJobScheduler(
+    "trial-expiry-check",
+    { pattern: "5 0 * * *" },
+    {
+      name: TRIAL_EXPIRY_CHECK,
+      data: {
+        triggeredAt: new Date().toISOString(),
+      } as TrialExpiryCheckJobPayload,
+    },
+  );
+
   console.log(
     JSON.stringify({
       level: "info",
@@ -91,6 +111,7 @@ export async function registerScheduledJobs(): Promise<void> {
         RECONCILIATION,
         SUMMARY,
         RESET_AI_COUNTERS,
+        TRIAL_EXPIRY_CHECK,
       ],
     }),
   );
