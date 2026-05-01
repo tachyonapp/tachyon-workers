@@ -5,7 +5,6 @@ import { getTradingDay, classifyProviderError, callBrain } from "../brain-router
 
 process.env.ANTHROPIC_API_KEY = "test-key";
 process.env.DB_ENCRYPTION_KEY = "a".repeat(64);
-process.env.TACHYON_BRAIN_DAILY_CAP = "10";
 
 // --- Mocks ---
 // All mock functions are created inside factories (ts-jest hoists jest.mock before const declarations).
@@ -90,7 +89,8 @@ const makeAnthropicMessage = (text: string) => ({
   content: [{ type: "text", text }],
 });
 
-const baseInput = { botId: "1", userId: "2", prompt: "Explain this trade" };
+const baseInput = { botId: "1", userId: "2", prompt: "Explain this trade", dailyCap: 10 };
+const byokInput = { botId: "1", userId: "2", prompt: "Explain this trade", dailyCap: null };
 
 // --- Tests ---
 
@@ -202,7 +202,7 @@ describe("callBrain()", () => {
     mockDecrypt.mockReturnValueOnce("raw-api-key");
     mockCreate.mockResolvedValueOnce(makeAnthropicMessage("BYOK response"));
 
-    const result = await callBrain(baseInput);
+    const result = await callBrain(byokInput);
 
     expect(mockDecrypt).toHaveBeenCalledWith("iv:cipher:tag");
     expect(result).toMatchObject({ ok: true, content: "BYOK response" });
@@ -213,7 +213,7 @@ describe("callBrain()", () => {
     mockDecrypt.mockReturnValueOnce("raw-api-key");
     mockCreate.mockResolvedValueOnce(makeAnthropicMessage("ok"));
 
-    await callBrain(baseInput);
+    await callBrain(byokInput);
 
     const insertedTables = mockInsertInto.mock.calls.map(([t]: [string]) => t);
     expect(insertedTables).not.toContain("bot_runtime_data");
@@ -225,7 +225,7 @@ describe("callBrain()", () => {
       throw new Error("bad key material");
     });
 
-    const result = await callBrain(baseInput);
+    const result = await callBrain(byokInput);
 
     expect(result).toEqual({
       ok: false,

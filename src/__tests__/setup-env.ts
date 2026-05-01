@@ -6,4 +6,3 @@ process.env.DATABASE_URL ??=
 process.env.DB_ENCRYPTION_KEY ??= "a".repeat(64);
 process.env.ANTHROPIC_API_KEY ??= "test-key";
 process.env.POSTGRES_SSL ??= "false";
-process.env.TACHYON_BRAIN_DAILY_CAP ??= "10";
