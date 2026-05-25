@@ -1,5 +1,6 @@
 import { Settings } from "luxon";
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { decrypt } from "../crypto";
 import { getTradingDay, classifyProviderError, callBrain } from "../brain-router";
 
@@ -50,6 +51,16 @@ jest.mock("../../db", () => {
   };
 });
 
+jest.mock("openai", () => {
+  const create = jest.fn();
+  const instance = { chat: { completions: { create } } };
+  const MockOpenAI = Object.assign(
+    jest.fn(function () { return instance; }),
+    { _instance: instance },
+  );
+  return { __esModule: true, default: MockOpenAI };
+});
+
 jest.mock("../crypto", () => ({
   decrypt: jest.fn(),
   encrypt: jest.fn(),
@@ -59,10 +70,14 @@ jest.mock("../crypto", () => ({
 type MockedAnthropicModule = typeof Anthropic & {
   _instance: { messages: { create: jest.Mock } };
 };
+type MockedOpenAIModule = typeof OpenAI & {
+  _instance: { chat: { completions: { create: jest.Mock } } };
+};
 type TwoArgAPIErrorCtor = new (status: number, message: string) => InstanceType<typeof Anthropic.APIError>;
 
 // Get references to mock internals after mocks are in place
 const mockCreate = (Anthropic as unknown as MockedAnthropicModule)._instance.messages.create;
+const mockOpenAICreate = (OpenAI as unknown as MockedOpenAIModule)._instance.chat.completions.create;
 const mockDecrypt = decrypt as jest.Mock;
 const { _test } = jest.requireMock("../../db");
 const mockExecuteTakeFirst = _test.executeTakeFirst as jest.Mock;
@@ -76,17 +91,30 @@ const makeTachyonConfig = () => ({
   model_id: "claude-haiku-4-5-20251001",
   provider: "anthropic",
   encrypted_key: null,
+  openai_model_variant: null,
+  anthropic_model_variant: null,
+  groq_model_variant: null,
+  gemini_model_variant: null,
 });
 
-const makeByokConfig = () => ({
+const makeByokConfig = (overrides?: Record<string, unknown>) => ({
   brain_type: "BYOK",
-  model_id: "claude-haiku-4-5-20251001",
+  model_id: "claude-sonnet-4-6",
   provider: "anthropic",
   encrypted_key: "iv:cipher:tag",
+  openai_model_variant: null,
+  anthropic_model_variant: null,
+  groq_model_variant: null,
+  gemini_model_variant: null,
+  ...overrides,
 });
 
 const makeAnthropicMessage = (text: string) => ({
   content: [{ type: "text", text }],
+});
+
+const makeOpenAICompletion = (text: string) => ({
+  choices: [{ message: { content: text } }],
 });
 
 const baseInput = { botId: "1", userId: "2", prompt: "Explain this trade", dailyCap: 10 };
@@ -244,6 +272,188 @@ describe("callBrain()", () => {
     const result = await callBrain(baseInput);
 
     expect(result).toEqual({ ok: false, reason: "PROVIDER_ERROR", detail: "unknown" });
+    const insertedTables = mockInsertInto.mock.calls.map(([t]: [string]) => t);
+    expect(insertedTables).toContain("brain_usage_log");
+  });
+});
+
+describe("callBrain() — BYOK model variant dispatch", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // 1. BYOK Anthropic with variant set → resolves to canonical model ID
+  it("BYOK anthropic with anthropic_model_variant='sonnet' dispatches to claude-sonnet-4-6", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ anthropic_model_variant: "sonnet" }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockCreate.mockResolvedValueOnce(makeAnthropicMessage("response"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "claude-sonnet-4-6" });
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-sonnet-4-6" }),
+    );
+  });
+
+  // 2. BYOK Anthropic with null variant → falls back to model_id
+  it("BYOK anthropic with null variant falls back to brainConfig.model_id", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ model_id: "claude-sonnet-4-6", anthropic_model_variant: null }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockCreate.mockResolvedValueOnce(makeAnthropicMessage("response"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "claude-sonnet-4-6" });
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "claude-sonnet-4-6" }),
+    );
+  });
+
+  // 3. BYOK OpenAI with variant set → dispatches via openai SDK
+  it("BYOK openai with openai_model_variant='gpt-4o-mini' resolves and dispatches via OpenAI SDK", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ provider: "openai", model_id: "gpt-4o", openai_model_variant: "gpt-4o-mini" }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockOpenAICreate.mockResolvedValueOnce(makeOpenAICompletion("openai response"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "gpt-4o-mini", provider: "openai" });
+    expect(mockOpenAICreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-4o-mini" }),
+    );
+  });
+
+  // 4. BYOK OpenAI with null variant → falls back to model_id
+  it("BYOK openai with null variant resolves effectiveModelId to brainConfig.model_id", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ provider: "openai", model_id: "gpt-4o", openai_model_variant: null }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockOpenAICreate.mockResolvedValueOnce(makeOpenAICompletion("fallback response"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "gpt-4o" });
+    expect(mockOpenAICreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-4o" }),
+    );
+  });
+
+  // 5. BYOK Groq with variant set → dispatches via OpenAI SDK with Groq baseURL
+  it("BYOK groq with groq_model_variant='llama-4-scout' dispatches to llama-4-scout-17b-16e-instruct", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ provider: "groq", model_id: "llama-fallback", groq_model_variant: "llama-4-scout" }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockOpenAICreate.mockResolvedValueOnce(makeOpenAICompletion("groq response"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "llama-4-scout-17b-16e-instruct", provider: "groq" });
+    expect(mockOpenAICreate).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "llama-4-scout-17b-16e-instruct" }),
+    );
+    const openAIConstructorCalls = (OpenAI as unknown as jest.Mock).mock.calls;
+    expect(openAIConstructorCalls.some(([opts]: [{ baseURL?: string }]) =>
+      opts?.baseURL === "https://api.groq.com/openai/v1",
+    )).toBe(true);
+  });
+
+  // 6. BYOK Groq with null variant → falls back to model_id
+  it("BYOK groq with null variant resolves effectiveModelId to brainConfig.model_id", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ provider: "groq", model_id: "llama-fallback", groq_model_variant: null }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockOpenAICreate.mockResolvedValueOnce(makeOpenAICompletion("groq fallback"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "llama-fallback" });
+  });
+
+  // 7. BYOK Gemini with variant set → dispatches via OpenAI SDK with Gemini baseURL
+  it("BYOK gemini with gemini_model_variant='gemini-2.0-flash' resolves and dispatches via OpenAI SDK", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ provider: "gemini", model_id: "gemini-fallback", gemini_model_variant: "gemini-2.0-flash" }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockOpenAICreate.mockResolvedValueOnce(makeOpenAICompletion("gemini response"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "gemini-2.0-flash", provider: "gemini" });
+    const openAIConstructorCalls = (OpenAI as unknown as jest.Mock).mock.calls;
+    expect(openAIConstructorCalls.some(([opts]: [{ baseURL?: string }]) =>
+      opts?.baseURL === "https://generativelanguage.googleapis.com/v1beta/openai/",
+    )).toBe(true);
+  });
+
+  // 8. BYOK Gemini with null variant → falls back to model_id
+  it("BYOK gemini with null variant resolves effectiveModelId to brainConfig.model_id", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ provider: "gemini", model_id: "gemini-fallback", gemini_model_variant: null }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockOpenAICreate.mockResolvedValueOnce(makeOpenAICompletion("gemini fallback"));
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toMatchObject({ ok: true, modelId: "gemini-fallback" });
+  });
+
+  // 9. Unrecognized variant string → SCAN_BOT_BRAIN_CONFIG_INVALID
+  it("BYOK anthropic with unrecognized variant returns PROVIDER_ERROR SCAN_BOT_BRAIN_CONFIG_INVALID", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ anthropic_model_variant: "unknown-model-xyz" }),
+    );
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "PROVIDER_ERROR",
+      detail: "SCAN_BOT_BRAIN_CONFIG_INVALID",
+    });
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  // 10. haiku as anthropic_model_variant → SCAN_BOT_BRAIN_CONFIG_INVALID (not in map)
+  it("BYOK anthropic with anthropic_model_variant='haiku' returns SCAN_BOT_BRAIN_CONFIG_INVALID", async () => {
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ anthropic_model_variant: "haiku" }),
+    );
+
+    const result = await callBrain(byokInput);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "PROVIDER_ERROR",
+      detail: "SCAN_BOT_BRAIN_CONFIG_INVALID",
+    });
+  });
+
+  // 11. brain_usage_log.model_id records the resolved model ID (returned on ok:true response)
+  it("ok:true response modelId reflects resolved variant, not raw brainConfig.model_id", async () => {
+    // brainConfig.model_id is a stale value; anthropic_model_variant resolves to claude-opus-4-7
+    mockExecuteTakeFirst.mockResolvedValueOnce(
+      makeByokConfig({ model_id: "claude-sonnet-4-6", anthropic_model_variant: "opus" }),
+    );
+    mockDecrypt.mockReturnValueOnce("raw-key");
+    mockCreate.mockResolvedValueOnce(makeAnthropicMessage("opus response"));
+
+    const result = await callBrain(byokInput);
+
+    // The returned modelId must be the resolved variant model ID
+    expect(result).toMatchObject({ ok: true, modelId: "claude-opus-4-7" });
+    // brain_usage_log insert must have been called (writeUsageLog executed)
     const insertedTables = mockInsertInto.mock.calls.map(([t]: [string]) => t);
     expect(insertedTables).toContain("brain_usage_log");
   });

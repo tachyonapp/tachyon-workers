@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { DateTime } from "luxon";
 import { sql } from "kysely";
 import { db } from "../db";
@@ -10,6 +11,39 @@ const tachyonAnthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
   timeout: 15_000,
 });
+
+// Variant → canonical model ID maps.
+// IMPORTANT: tachyon-api/src/config/brainProviders.ts contains the authoritative copy.
+// When model IDs change in brainProviders.ts, update this file too.
+// Follow-on tech debt: move to @tachyonapp/tachyon-queue-types/config.
+const ANTHROPIC_VARIANT_MODEL_IDS: Record<string, string> = {
+  sonnet: "claude-sonnet-4-6",
+  opus:   "claude-opus-4-7",
+  // haiku is reserved for TACHYON_HOSTED — not stored as a BYOK variant
+};
+
+const OPENAI_VARIANT_MODEL_IDS: Record<string, string> = {
+  "gpt-4o":      "gpt-4o",
+  "gpt-4o-mini": "gpt-4o-mini",
+};
+
+const GROQ_VARIANT_MODEL_IDS: Record<string, string> = {
+  "llama-4-scout":    "llama-4-scout-17b-16e-instruct",
+  "llama-4-maverick": "llama-4-maverick-17b-128e-instruct",
+  "llama-3.3-70b":    "llama-3.3-70b-versatile",
+};
+
+const GEMINI_VARIANT_MODEL_IDS: Record<string, string> = {
+  "gemini-2.0-flash": "gemini-2.0-flash",
+  "gemini-2.5-flash": "gemini-2.5-flash-preview-05-20",
+};
+
+// Groq and Gemini use OpenAI-compatible endpoints; dispatch via openai SDK with baseURL override.
+// IMPORTANT: keep in sync with tachyon-api/src/config/brainProviders.ts.
+const BYOK_PROVIDER_BASE_URLS: Partial<Record<string, string>> = {
+  groq:   "https://api.groq.com/openai/v1",
+  gemini: "https://generativelanguage.googleapis.com/v1beta/openai/",
+};
 
 // --- Public Interface ---
 
@@ -47,7 +81,16 @@ export async function callBrain(
   // 1. Fetch active brain config
   const brainConfig = await db
     .selectFrom("bot_brain_configs")
-    .select(["brain_type", "model_id", "provider", "encrypted_key"])
+    .select([
+      "brain_type",
+      "model_id",
+      "provider",
+      "encrypted_key",
+      "openai_model_variant",
+      "anthropic_model_variant",
+      "groq_model_variant",
+      "gemini_model_variant",
+    ] as const)
     .where("bot_id", "=", botId)
     .where("is_active", "=", true)
     .executeTakeFirst();
@@ -76,9 +119,11 @@ export async function callBrain(
   // 3. Dispatch to provider
   const startMs = Date.now();
   let content: string;
+  let resolvedModelId: string | undefined;
 
   try {
     if (brainConfig.brain_type === "TACHYON_HOSTED") {
+      resolvedModelId = brainConfig.model_id;
       content = await callAnthropic(
         tachyonAnthropic,
         brainConfig.model_id,
@@ -86,7 +131,78 @@ export async function callBrain(
         maxTokens,
       );
     } else {
-      // BYOK — Anthropic only in MVP
+      // BYOK — resolve effective model ID from variant column (with null fallback to model_id)
+      let effectiveModelId: string;
+      const provider = brainConfig.provider;
+
+      if (provider === "anthropic") {
+        const variant = brainConfig.anthropic_model_variant;
+        if (variant !== null && variant !== undefined) {
+          const resolved = ANTHROPIC_VARIANT_MODEL_IDS[variant];
+          if (!resolved) {
+            console.error(JSON.stringify({
+              level: "error", event: "brain.variant.unknown",
+              botId, variant, provider: "anthropic",
+              errorCode: "SCAN_BOT_BRAIN_CONFIG_INVALID",
+            }));
+            return { ok: false, reason: "PROVIDER_ERROR", detail: "SCAN_BOT_BRAIN_CONFIG_INVALID" };
+          }
+          effectiveModelId = resolved;
+        } else {
+          effectiveModelId = brainConfig.model_id; // null fallback — backward compat
+        }
+      } else if (provider === "openai") {
+        const variant = brainConfig.openai_model_variant;
+        if (variant !== null && variant !== undefined) {
+          const resolved = OPENAI_VARIANT_MODEL_IDS[variant];
+          if (!resolved) {
+            console.error(JSON.stringify({
+              level: "error", event: "brain.variant.unknown",
+              botId, variant, provider: "openai",
+              errorCode: "SCAN_BOT_BRAIN_CONFIG_INVALID",
+            }));
+            return { ok: false, reason: "PROVIDER_ERROR", detail: "SCAN_BOT_BRAIN_CONFIG_INVALID" };
+          }
+          effectiveModelId = resolved;
+        } else {
+          effectiveModelId = brainConfig.model_id; // null fallback — backward compat
+        }
+      } else if (provider === "groq") {
+        const variant = brainConfig.groq_model_variant;
+        if (variant !== null && variant !== undefined) {
+          const resolved = GROQ_VARIANT_MODEL_IDS[variant];
+          if (!resolved) {
+            console.error(JSON.stringify({
+              level: "error", event: "brain.variant.unknown",
+              botId, variant, provider: "groq",
+              errorCode: "SCAN_BOT_BRAIN_CONFIG_INVALID",
+            }));
+            return { ok: false, reason: "PROVIDER_ERROR", detail: "SCAN_BOT_BRAIN_CONFIG_INVALID" };
+          }
+          effectiveModelId = resolved;
+        } else {
+          effectiveModelId = brainConfig.model_id; // null fallback — backward compat
+        }
+      } else if (provider === "gemini") {
+        const variant = brainConfig.gemini_model_variant;
+        if (variant !== null && variant !== undefined) {
+          const resolved = GEMINI_VARIANT_MODEL_IDS[variant];
+          if (!resolved) {
+            console.error(JSON.stringify({
+              level: "error", event: "brain.variant.unknown",
+              botId, variant, provider: "gemini",
+              errorCode: "SCAN_BOT_BRAIN_CONFIG_INVALID",
+            }));
+            return { ok: false, reason: "PROVIDER_ERROR", detail: "SCAN_BOT_BRAIN_CONFIG_INVALID" };
+          }
+          effectiveModelId = resolved;
+        } else {
+          effectiveModelId = brainConfig.model_id; // null fallback — backward compat
+        }
+      } else {
+        return { ok: false, reason: "PROVIDER_ERROR", detail: `Unsupported provider: ${provider}` };
+      }
+
       let rawKey: string;
       try {
         rawKey = decrypt(brainConfig.encrypted_key!);
@@ -94,22 +210,26 @@ export async function callBrain(
         return { ok: false, reason: "DECRYPTION_ERROR", detail: String(err) };
       }
 
-      if (brainConfig.provider === "anthropic") {
+      if (provider === "anthropic") {
         const byokClient = new Anthropic({ apiKey: rawKey, timeout: 15_000 });
-        content = await callAnthropic(
-          byokClient,
-          brainConfig.model_id,
-          prompt,
-          maxTokens,
-        );
-        // rawKey goes out of scope here
+        content = await callAnthropic(byokClient, effectiveModelId, prompt, maxTokens);
+      } else if (provider === "openai") {
+        const byokClient = new OpenAI({ apiKey: rawKey, timeout: 15_000 });
+        content = await callOpenAI(byokClient, effectiveModelId, prompt, maxTokens);
+      } else if (provider === "groq") {
+        // Groq — OpenAI-compatible endpoint; reuse openai SDK with baseURL override
+        const byokClient = new OpenAI({ apiKey: rawKey, baseURL: BYOK_PROVIDER_BASE_URLS.groq, timeout: 15_000 });
+        content = await callOpenAI(byokClient, effectiveModelId, prompt, maxTokens);
+      } else if (provider === "gemini") {
+        // Gemini — OpenAI-compatible endpoint; reuse openai SDK with baseURL override
+        const byokClient = new OpenAI({ apiKey: rawKey, baseURL: BYOK_PROVIDER_BASE_URLS.gemini, timeout: 15_000 });
+        content = await callOpenAI(byokClient, effectiveModelId, prompt, maxTokens);
       } else {
-        return {
-          ok: false,
-          reason: "PROVIDER_ERROR",
-          detail: `Unsupported provider: ${brainConfig.provider}`,
-        };
+        return { ok: false, reason: "PROVIDER_ERROR", detail: `Unsupported provider: ${provider}` };
       }
+
+      // Assign effectiveModelId to outer scope for usage log
+      resolvedModelId = effectiveModelId;
     }
   } catch (err) {
     const latencyMs = Date.now() - startMs;
@@ -121,7 +241,7 @@ export async function callBrain(
         userId,
         today,
         provider: brainConfig.provider ?? "anthropic",
-        modelId: brainConfig.model_id,
+        modelId: resolvedModelId ?? brainConfig.model_id,
         costCategory: brainConfig.brain_type,
         latencyMs,
         success: false,
@@ -179,7 +299,7 @@ export async function callBrain(
       userId,
       today,
       provider: brainConfig.provider ?? "anthropic",
-      modelId: brainConfig.model_id,
+      modelId: resolvedModelId ?? brainConfig.model_id,
       costCategory: brainConfig.brain_type,
       latencyMs,
       success: true,
@@ -199,7 +319,7 @@ export async function callBrain(
     ok: true,
     content,
     provider: brainConfig.provider ?? "anthropic",
-    modelId: brainConfig.model_id,
+    modelId: resolvedModelId ?? brainConfig.model_id,
     latencyMs,
   };
 }
@@ -221,7 +341,7 @@ export function classifyProviderError(err: unknown): string {
   return "unknown";
 }
 
-// --- Private Provider Dispatcher ---
+// --- Private Provider Dispatchers ---
 
 async function callAnthropic(
   client: Anthropic,
@@ -238,6 +358,22 @@ async function callAnthropic(
   if (block?.type !== "text")
     throw new Error("Anthropic returned non-text content block");
   return block.text;
+}
+
+export async function callOpenAI(
+  client: OpenAI,
+  modelId: string,
+  prompt: string,
+  maxTokens: number,
+): Promise<string> {
+  const completion = await client.chat.completions.create({
+    model: modelId,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const text = completion.choices[0]?.message?.content;
+  if (!text) throw new Error("OpenAI-compatible provider returned empty content");
+  return text;
 }
 
 // --- DB Helper ---
