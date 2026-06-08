@@ -5,12 +5,14 @@ import { expiryQueue } from "./queues/expiry.queue";
 import { reconciliationQueue } from "./queues/reconciliation.queue";
 import { summaryQueue } from "./queues/summary.queue";
 import { trialExpiryCheckQueue } from "./queues/trial-expiry-check.queue";
+import { auditLogPartitionQueue } from "./queues/audit-log-partition.queue";
 import type {
   ScanDispatchJobPayload,
   ExpiryJobPayload,
   ReconciliationJobPayload,
   SummaryJobPayload,
   TrialExpiryCheckJobPayload,
+  AuditLogPartitionJobPayload,
 } from "@tachyonapp/tachyon-queue-types";
 import { QUEUE_NAMES } from "@tachyonapp/tachyon-queue-types";
 
@@ -21,6 +23,7 @@ const {
   SUMMARY,
   RECONCILIATION,
   TRIAL_EXPIRY_CHECK,
+  AUDIT_LOG_PARTITION,
 } = QUEUE_NAMES;
 
 /**
@@ -101,6 +104,20 @@ export async function registerScheduledJobs(): Promise<void> {
     },
   );
 
+  // 00:00 UTC on the 25th of each month — creates next month's rule_audit_log partition,
+  // detaches partitions older than 24 months, drops partitions older than 5 years.
+  // Must run before month-end so the July partition exists before July 1 inserts arrive.
+  await auditLogPartitionQueue.upsertJobScheduler(
+    "audit-log-partition-cron",
+    { pattern: "0 0 25 * *" },
+    {
+      name: AUDIT_LOG_PARTITION,
+      data: {
+        triggeredAt: new Date().toISOString(),
+      } as AuditLogPartitionJobPayload,
+    },
+  );
+
   console.log(
     JSON.stringify({
       level: "info",
@@ -112,6 +129,7 @@ export async function registerScheduledJobs(): Promise<void> {
         SUMMARY,
         RESET_AI_COUNTERS,
         TRIAL_EXPIRY_CHECK,
+        AUDIT_LOG_PARTITION,
       ],
     }),
   );
