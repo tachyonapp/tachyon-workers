@@ -1,6 +1,6 @@
 {
   "name": "tachyon-workers",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tachyon Worker Services - Background job processing",
   "private": true,
   "scripts": {
