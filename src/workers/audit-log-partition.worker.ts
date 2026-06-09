@@ -167,9 +167,11 @@ export const auditLogPartitionWorker = new Worker<AuditLogPartitionJobPayload>(
     // ── Step 2: REVOKE DELETE on new partition ──────────────────────────────
     // Idempotent — safe to run even if the partition already existed.
     // Compliance requirement: tachyon_app must never be able to delete audit rows.
+    // Wrapped in a role-existence check so the cron does not fail in environments
+    // where tachyon_app has not been provisioned (e.g. CI, local dev).
     try {
       await sql.raw(
-        `REVOKE DELETE ON ${nextName} FROM tachyon_app`,
+        `DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tachyon_app') THEN REVOKE DELETE ON ${nextName} FROM tachyon_app; END IF; END $$`,
       ).execute(db);
 
       console.log(
