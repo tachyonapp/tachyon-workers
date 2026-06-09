@@ -1,5 +1,49 @@
-import { evaluateProposalRules, evaluatePreSubmissionRules, stubbedPnLProvider } from '../rule-engine';
+import { evaluateProposalRules, evaluatePreSubmissionRules } from '../rule-engine';
 import type { RuleEngineInput, PreSubmissionInput } from '@tachyonapp/tachyon-queue-types';
+
+// ---------------------------------------------------------------------------
+// Mock type definitions
+// ---------------------------------------------------------------------------
+
+interface SelectBuilderMock {
+  select: jest.Mock;
+  where: jest.Mock;
+  innerJoin: jest.Mock;
+  forUpdate: jest.Mock;
+  executeTakeFirst: jest.Mock;
+  execute: jest.Mock;
+}
+
+interface UpdateBuilderMock {
+  set: jest.Mock;
+  where: jest.Mock;
+  execute: jest.Mock;
+}
+
+interface InsertBuilderMock {
+  values: jest.Mock;
+  execute: jest.Mock;
+}
+
+interface TxMock {
+  selectFrom: jest.Mock;
+  updateTable: jest.Mock;
+  insertInto: jest.Mock;
+}
+
+interface DbMockState {
+  tx: TxMock;
+  txExecute: jest.Mock;
+  transaction: jest.Mock;
+  selectBuilder: SelectBuilderMock;
+  updateBuilder: UpdateBuilderMock;
+  insertBuilder: InsertBuilderMock;
+}
+
+interface DbModule {
+  db: { transaction: jest.Mock; insertInto: jest.Mock };
+  __mock: DbMockState;
+}
 
 jest.mock('@sentry/node', () => ({
   captureException: jest.fn(),
@@ -39,7 +83,7 @@ jest.mock('../../db', () => {
     insertInto: jest.fn().mockReturnValue(insertBuilder),
   };
 
-  const txExecute = jest.fn().mockImplementation(async (cb: any) => cb(tx));
+  const txExecute = jest.fn().mockImplementation(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx));
   const transaction = jest.fn().mockReturnValue({ execute: txExecute });
 
   const db = {
@@ -59,8 +103,8 @@ jest.mock('../../db', () => {
 // ---------------------------------------------------------------------------
 
 function getMocks() {
-  const mod = require('../../db') as { db: any; __mock: any };
-  const sentry = require('@sentry/node') as { captureException: jest.Mock };
+  const mod = jest.requireMock('../../db') as DbModule;
+  const sentry = jest.requireMock('@sentry/node') as { captureException: jest.Mock };
   return { db: mod.db, m: mod.__mock, sentry };
 }
 
@@ -84,7 +128,7 @@ function resetBuilderMocks() {
   m.tx.updateTable.mockReturnValue(m.updateBuilder);
   m.tx.insertInto.mockReturnValue(m.insertBuilder);
 
-  m.txExecute.mockImplementation(async (cb: any) => cb(m.tx));
+  m.txExecute.mockImplementation(async (cb: (t: TxMock) => Promise<unknown>) => cb(m.tx));
   m.transaction.mockReturnValue({ execute: m.txExecute });
   db.transaction.mockReturnValue({ execute: m.txExecute });
   db.insertInto.mockReturnValue(m.insertBuilder);
@@ -210,18 +254,18 @@ describe('evaluateProposalRules — DAILY_MAX_LOSS_REACHED standown', () => {
     // bots.status = 'STOOD_DOWN' must be written
     expect(m.tx.updateTable).toHaveBeenCalledWith('bots');
     const botsSetCall = m.updateBuilder.set.mock.calls.find(
-      (call: any[]) => call[0]?.status === 'STOOD_DOWN',
+      (call) => (call[0] as Record<string, unknown>)?.status === 'STOOD_DOWN',
     );
     expect(botsSetCall).toBeDefined();
-    expect(botsSetCall![0].recovery_mode_applied).toBe('NORMAL'); // copies recovery_mode from settings
+    expect((botsSetCall![0] as Record<string, unknown>).recovery_mode_applied).toBe('NORMAL'); // copies recovery_mode from settings
 
     // bot_runtime_data.stands_down = true must be written
     expect(m.tx.updateTable).toHaveBeenCalledWith('bot_runtime_data');
     const runtimeSetCall = m.updateBuilder.set.mock.calls.find(
-      (call: any[]) => call[0]?.stands_down === true,
+      (call) => (call[0] as Record<string, unknown>)?.stands_down === true,
     );
     expect(runtimeSetCall).toBeDefined();
-    expect(runtimeSetCall![0].standdown_reason).toBe('DAILY_MAX_LOSS_REACHED');
+    expect((runtimeSetCall![0] as Record<string, unknown>).standdown_reason).toBe('DAILY_MAX_LOSS_REACHED');
 
     // Audit log written
     expect(m.tx.insertInto).toHaveBeenCalledWith('rule_audit_log');
@@ -532,10 +576,10 @@ describe('evaluateProposalRules — MAX_DRAWDOWN_EXCEEDED standown', () => {
     // Verify STOOD_DOWN was written with recovery_mode_applied = NULL
     expect(m.tx.updateTable).toHaveBeenCalledWith('bots');
     const botsSetCall = m.updateBuilder.set.mock.calls.find(
-      (call: any[]) => call[0]?.status === 'STOOD_DOWN',
+      (call) => (call[0] as Record<string, unknown>)?.status === 'STOOD_DOWN',
     );
     expect(botsSetCall).toBeDefined();
-    expect(botsSetCall![0].recovery_mode_applied).toBeNull();
+    expect((botsSetCall![0] as Record<string, unknown>).recovery_mode_applied).toBeNull();
 
     // Confirm this is a DIFFERENT code path from DAILY_MAX_LOSS_REACHED which copies recovery_mode
     // DAILY_MAX_GAIN test (test 7) verifies recovery_mode_applied is copied; this test confirms
@@ -778,16 +822,16 @@ describe('evaluateProposalRules — DAILY_MAX_GAIN_REACHED recovery_mode_applied
 
     // recovery_mode from settings ('NORMAL') must be copied to bots.recovery_mode_applied
     const botsSetCall = m.updateBuilder.set.mock.calls.find(
-      (call: any[]) => call[0]?.status === 'STOOD_DOWN',
+      (call) => (call[0] as Record<string, unknown>)?.status === 'STOOD_DOWN',
     );
     expect(botsSetCall).toBeDefined();
-    expect(botsSetCall![0].recovery_mode_applied).toBe('NORMAL');
+    expect((botsSetCall![0] as Record<string, unknown>).recovery_mode_applied).toBe('NORMAL');
 
     // standdown_reason = 'DAILY_MAX_GAIN_REACHED' written to bot_runtime_data
     const runtimeSetCall = m.updateBuilder.set.mock.calls.find(
-      (call: any[]) => call[0]?.stands_down === true,
+      (call) => (call[0] as Record<string, unknown>)?.stands_down === true,
     );
     expect(runtimeSetCall).toBeDefined();
-    expect(runtimeSetCall![0].standdown_reason).toBe('DAILY_MAX_GAIN_REACHED');
+    expect((runtimeSetCall![0] as Record<string, unknown>).standdown_reason).toBe('DAILY_MAX_GAIN_REACHED');
   });
 });
