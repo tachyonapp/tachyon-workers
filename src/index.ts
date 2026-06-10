@@ -46,6 +46,7 @@ import { summaryWorker } from "./workers/summary.worker";
 import { resetAiCountersWorker } from "./workers/reset-ai-counters.worker";
 import { trialExpiryWorker } from "./workers/trial-expiry.worker";
 import { auditLogPartitionWorker } from "./workers/audit-log-partition.worker";
+import { ruleResetWorker } from "./workers/rule-reset.worker";
 
 import { registerScheduledJobs } from "./scheduler";
 import { gracefulShutdown } from "./shutdown";
@@ -64,6 +65,7 @@ const allWorkers = [
   resetAiCountersWorker,
   trialExpiryWorker,
   auditLogPartitionWorker,
+  ruleResetWorker,
 ];
 
 async function main(): Promise<void> {

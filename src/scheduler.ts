@@ -6,6 +6,7 @@ import { reconciliationQueue } from "./queues/reconciliation.queue";
 import { summaryQueue } from "./queues/summary.queue";
 import { trialExpiryCheckQueue } from "./queues/trial-expiry-check.queue";
 import { auditLogPartitionQueue } from "./queues/audit-log-partition.queue";
+import { ruleResetQueue } from "./queues/rule-reset.queue";
 import type {
   ScanDispatchJobPayload,
   ExpiryJobPayload,
@@ -13,6 +14,7 @@ import type {
   SummaryJobPayload,
   TrialExpiryCheckJobPayload,
   AuditLogPartitionJobPayload,
+  RuleResetJobPayload,
 } from "@tachyonapp/tachyon-queue-types";
 import { QUEUE_NAMES } from "@tachyonapp/tachyon-queue-types";
 
@@ -24,6 +26,7 @@ const {
   RECONCILIATION,
   TRIAL_EXPIRY_CHECK,
   AUDIT_LOG_PARTITION,
+  RULE_RESET,
 } = QUEUE_NAMES;
 
 /**
@@ -118,6 +121,19 @@ export async function registerScheduledJobs(): Promise<void> {
     },
   );
 
+  // 13:30 UTC = NYSE open in EDT (summer). In EST (winter) fires at 8:30 AM ET —
+  // bots reset before market open in both cases, which is the desired behavior.
+  await ruleResetQueue.upsertJobScheduler(
+    "rule-reset-cron",
+    { pattern: "30 13 * * 1-5" },
+    {
+      name: RULE_RESET,
+      data: {
+        triggeredAt: new Date().toISOString(),
+      } as RuleResetJobPayload,
+    },
+  );
+
   console.log(
     JSON.stringify({
       level: "info",
@@ -130,6 +146,7 @@ export async function registerScheduledJobs(): Promise<void> {
         RESET_AI_COUNTERS,
         TRIAL_EXPIRY_CHECK,
         AUDIT_LOG_PARTITION,
+        RULE_RESET,
       ],
     }),
   );
