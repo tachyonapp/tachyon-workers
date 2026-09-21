@@ -5,4 +5,5 @@ process.env.DATABASE_URL ??=
   "postgres://tachyon:tachyon_local_dev@localhost:5432/tachyon_dev";
 process.env.DB_ENCRYPTION_KEY ??= "a".repeat(64);
 process.env.ANTHROPIC_API_KEY ??= "test-key";
+process.env.EODHD_API_KEY ??= "test-key";
 process.env.POSTGRES_SSL ??= "false";
