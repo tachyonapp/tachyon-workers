@@ -7,6 +7,7 @@ import { summaryQueue } from "./queues/summary.queue";
 import { trialExpiryCheckQueue } from "./queues/trial-expiry-check.queue";
 import { auditLogPartitionQueue } from "./queues/audit-log-partition.queue";
 import { ruleResetQueue } from "./queues/rule-reset.queue";
+import { universeRefreshQueue } from "./queues/universe-refresh.queue";
 import type {
   ScanDispatchJobPayload,
   ExpiryJobPayload,
@@ -15,6 +16,7 @@ import type {
   TrialExpiryCheckJobPayload,
   AuditLogPartitionJobPayload,
   RuleResetJobPayload,
+  UniverseRefreshJobPayload,
 } from "@tachyonapp/tachyon-queue-types";
 import { QUEUE_NAMES } from "@tachyonapp/tachyon-queue-types";
 
@@ -27,6 +29,7 @@ const {
   TRIAL_EXPIRY_CHECK,
   AUDIT_LOG_PARTITION,
   RULE_RESET,
+  UNIVERSE_REFRESH,
 } = QUEUE_NAMES;
 
 /**
@@ -37,6 +40,23 @@ const {
  * idempotent Valkey-backed registration and deterministic job IDs.
  */
 export async function registerScheduledJobs(): Promise<void> {
+  // Fires 2 minutes ahead of every scan-dispatch tick (:58,:03,:08,...,:53 vs
+  // scan-dispatch's :00,:05,:10,...,:55), so bucket data has a head start before
+  // scan-bot ever reads from the cache. Hour range starts at 13, one hour
+  // before scan-dispatch's 14-21 window, so the 13:58 run covers scan-dispatch's
+  // very first 14:00 tick — without it, the first tick of the day would have no
+  // head-started refresh.
+  await universeRefreshQueue.upsertJobScheduler(
+    "universe-refresh-cron",
+    { pattern: "58,3,8,13,18,23,28,33,38,43,48,53 13-21 * * 1-5" },
+    {
+      name: UNIVERSE_REFRESH,
+      data: {
+        triggeredAt: new Date().toISOString(),
+      } as UniverseRefreshJobPayload,
+    },
+  );
+
   await scanDispatchQueue.upsertJobScheduler(
     "scan-dispatch-cron",
     { pattern: "*/5 14-21 * * 1-5" },
@@ -139,6 +159,7 @@ export async function registerScheduledJobs(): Promise<void> {
       level: "info",
       event: "scheduler.registered",
       queues: [
+        UNIVERSE_REFRESH,
         SCAN_DISPATCH,
         EXPIRY,
         RECONCILIATION,
