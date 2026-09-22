@@ -18,30 +18,16 @@
 // publicly documented Screener/Fundamentals endpoints and MUST be verified
 // against a real EODHD account before this goes live.
 // =============================================================================
-import { MarketCapTier } from "@tachyonapp/tachyon-queue-types";
+import {
+  MarketCapTier,
+  MARKET_CAP_TIER_USD_BANDS,
+} from "@tachyonapp/tachyon-queue-types";
 
 const EODHD_API_BASE_URL = "https://eodhd.com/api"; // static vendor URL — no operational reason to make this env-tunable (see tachyon-infra DEV-5)
 
 // US-only per platform constraint (long-only, stocks + ETFs only). EODHD
 // requires an exchange suffix on every symbol (e.g. "AAPL.US").
 const EODHD_EXCHANGE_SUFFIX = ".US";
-
-// Non-overlapping numeric bands so a single symbol never lands in two
-// market-cap-tier buckets. LIQUID_LARGE_CAPS intentionally shares LARGE_CAP's
-// numeric band — it's a liquidity-driven tier, not a cap-driven one (see
-// tachyon-queue-types DEV-3 ambiguity note; band pending Kevin/Brock confirmation).
-const EODHD_MARKET_CAP_FILTERS: Record<
-  MarketCapTier,
-  { min: number; max?: number }
-> = {
-  [MarketCapTier.MEGA_CAP]: { min: 200_000_000_000 },
-  [MarketCapTier.LARGE_CAP]: { min: 10_000_000_000, max: 200_000_000_000 },
-  [MarketCapTier.LIQUID_LARGE_CAPS]: {
-    min: 10_000_000_000,
-    max: 200_000_000_000,
-  },
-  [MarketCapTier.MID_CAP]: { min: 2_000_000_000, max: 10_000_000_000 },
-};
 
 /**
  * Masks the `api_token` query param value before a URL is logged. Every log
@@ -165,7 +151,7 @@ export async function fetchScreenerBucket(
   query: ScreenerBucketQuery,
 ): Promise<ScreenerResult[]> {
   const apiKey = requireApiKey();
-  const capFilter = EODHD_MARKET_CAP_FILTERS[query.marketCapTier];
+  const capFilter = MARKET_CAP_TIER_USD_BANDS[query.marketCapTier];
 
   const filters: unknown[] = [
     ["sector", "=", query.parentSector],

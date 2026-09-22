@@ -133,6 +133,7 @@ async function refreshBucket(
     const resolvedLabel = GICS_SUB_SECTOR_MAP[r.gicsSubIndustry];
     return {
       symbol: r.symbol,
+      parentSector,
       marketCapUsd: r.marketCapUsd,
       avgDollarVolume: r.avgDollarVolume,
       resolvedSubSectors: resolvedLabel ? [resolvedLabel] : [],
