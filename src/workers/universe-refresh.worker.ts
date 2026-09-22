@@ -1,5 +1,5 @@
 /**
- * Universe Refresh Worker
+ * Universe Refresh Worker (Market Scanning)
  *
  * Role: cron-triggered, universe-wide bucket refresh — NOT bot-specific. Populates
  * the `universe:bucket:<parentSector>:<marketCapTier>` Valkey cache (universe-cache.ts)
@@ -10,24 +10,14 @@
  * environment so it can be validated in staging
  * with zero risk to the live scan-bot guards before being flipped on.
  *
- * Circuit breaker granularity: the breaker is updated ONCE per tick, based on the
- * tick's AGGREGATE outcome across all ~44 buckets (all attempted buckets failed =
- * tick failure; at least one succeeded = tick success) — NOT once per bucket.
- * Calling recordRefreshFailure/recordRefreshSuccess per bucket would let a single lucky bucket mid-loop reset
- * the breaker via recordRefreshSuccess's unconditional CLOSED reset, even while
- * most other buckets in the same tick are failing — masking a real partial
- * outage. Aggregating per tick also makes failureThreshold mean "N consecutive
- * fully-failed ticks" rather than "N bucket failures within a single tick".
+ * UniverseBucketCacheEntry only carries a single `tier` per bucket
+ * (see tachyon-queue-types), so this worker gates the whole bucket
+ * by the FAST tier interval rather than mixing field-level partial writes —
+ * an explicitly permitted MVP simplification. Per symbol gating to be
+ * considered post-MVP
  *
- * Bucket write simplification (MVP): the TDD describes per-field FAST/SLOW tier
- * cadence gating within a bucket. UniverseBucketCacheEntry only carries a single
- * `tier` per bucket (see tachyon-queue-types), so this worker gates the whole
- * bucket by the FAST tier interval rather than mixing field-level partial writes —
- * an explicitly permitted MVP simplification.
- *
- * asOf simplification: EODHD's bulk Screener response has no single per-row
- * "source data timestamp" to use for `asOf` (unlike a per-symbol fundamentals
- * call). This worker uses the fetch completion time as a practical proxy.
+ * See README section Universe Refresh (Market Scanning) for more
+ * detailed documentation on this worker.
  */
 import { Worker, type Job } from "bullmq";
 import * as Sentry from "@sentry/node";
@@ -40,6 +30,7 @@ import {
   type UniverseBucketSymbolEntry,
 } from "@tachyonapp/tachyon-queue-types";
 import { getBullMQConnectionOptions } from "../connection";
+import { universeRefreshQueue } from "../queues/universe-refresh.queue";
 import { fetchScreenerBucket, fetchFundamentals } from "../lib/eodhd-client";
 import {
   bucketCacheKey,
@@ -69,9 +60,61 @@ function getFastTierSeconds(): number {
   return Number(process.env.UNIVERSE_REFRESH_FAST_TIER_SECONDS ?? 300);
 }
 
+function getEarningsLookaheadHours(): number {
+  return Number(process.env.EARNINGS_REFRESH_LOOKAHEAD_HOURS ?? 24);
+}
+
+// Business-level bucket identifier used in job payloads — deliberately
+// distinct from bucketCacheKey()'s Valkey-specific "universe:bucket:*" format
+// (universe-cache.ts alone owns that). Matches UniverseBucketKey's documented
+// shape: "<parentSector>:<marketCapTier>".
+function toUniverseBucketKey(
+  parentSector: string,
+  marketCapTier: MarketCapTier,
+): string {
+  return `${parentSector}:${marketCapTier}`;
+}
+
+function parseUniverseBucketKey(key: string): {
+  parentSector: string;
+  marketCapTier: MarketCapTier;
+} {
+  const [parentSector, marketCapTier] = key.split(":");
+  return { parentSector, marketCapTier: marketCapTier as MarketCapTier };
+}
+
+function isEarningsImminent(symbols: UniverseBucketSymbolEntry[]): boolean {
+  const cutoffMs = Date.now() + getEarningsLookaheadHours() * 60 * 60 * 1000;
+  return symbols.some((s) => {
+    if (!s.nextEarningsDate) return false;
+    const earningsMs = new Date(s.nextEarningsDate).getTime();
+    return earningsMs >= Date.now() && earningsMs <= cutoffMs;
+  });
+}
+
+async function enqueueOutOfBandRefresh(
+  targetBucketKey: string,
+  reason: "earnings_imminent",
+): Promise<void> {
+  await universeRefreshQueue.add(QUEUE_NAMES.UNIVERSE_REFRESH, {
+    triggeredAt: new Date().toISOString(),
+    targetBucketKey,
+  } satisfies UniverseRefreshJobPayload);
+
+  console.log(
+    JSON.stringify({
+      level: "info",
+      event: "universe-refresh.out-of-band-enqueued",
+      targetBucketKey,
+      reason,
+    }),
+  );
+}
+
 async function refreshBucket(
   parentSector: string,
   marketCapTier: MarketCapTier,
+  { checkOutOfBandTriggers }: { checkOutOfBandTriggers: boolean },
 ): Promise<void> {
   const bucketKey = bucketCacheKey(parentSector, marketCapTier);
 
@@ -110,6 +153,13 @@ async function refreshBucket(
     tier: "FAST",
     symbols,
   });
+
+  if (!checkOutOfBandTriggers) return;
+
+  if (isEarningsImminent(symbols)) {
+    const targetBucketKey = toUniverseBucketKey(parentSector, marketCapTier);
+    await enqueueOutOfBandRefresh(targetBucketKey, "earnings_imminent");
+  }
 }
 
 export async function processUniverseRefresh(
@@ -142,11 +192,23 @@ export async function processUniverseRefresh(
     return;
   }
 
+  const isTargetedRun = Boolean(job.data.targetBucketKey);
+  const bucketsToProcess = isTargetedRun
+    ? [parseUniverseBucketKey(job.data.targetBucketKey!)]
+    : ALLOWED_SECTORS.flatMap(({ parentSector }) =>
+        Object.values(MarketCapTier).map((marketCapTier) => ({
+          parentSector,
+          marketCapTier,
+        })),
+      );
+
   console.log(
     JSON.stringify({
       level: "info",
       event: "universe-refresh.started",
       triggeredAt: job.data.triggeredAt,
+      targeted: isTargetedRun,
+      bucketCount: bucketsToProcess.length,
     }),
   );
 
@@ -154,50 +216,49 @@ export async function processUniverseRefresh(
   let succeededBuckets = 0;
   let skippedLockedBuckets = 0;
 
-  for (const { parentSector } of ALLOWED_SECTORS) {
-    for (const marketCapTier of Object.values(MarketCapTier)) {
-      const bucketKey = bucketCacheKey(parentSector, marketCapTier);
-      const locked = await acquireBucketLock(
-        bucketKey,
-        BUCKET_LOCK_TTL_SECONDS,
+  for (const { parentSector, marketCapTier } of bucketsToProcess) {
+    const bucketKey = bucketCacheKey(parentSector, marketCapTier);
+    const locked = await acquireBucketLock(bucketKey, BUCKET_LOCK_TTL_SECONDS);
+    if (!locked) {
+      skippedLockedBuckets++;
+      console.log(
+        JSON.stringify({
+          level: "info",
+          event: "universe-refresh.bucket-locked-skip",
+          bucketKey,
+        }),
       );
-      if (!locked) {
-        skippedLockedBuckets++;
-        console.log(
-          JSON.stringify({
-            level: "info",
-            event: "universe-refresh.bucket-locked-skip",
-            bucketKey,
-          }),
-        );
-        continue;
-      }
+      continue;
+    }
 
-      attemptedBuckets++;
-      try {
-        await refreshBucket(parentSector, marketCapTier);
-        succeededBuckets++;
-        console.log(
-          JSON.stringify({
-            level: "info",
-            event: "universe-refresh.bucket-refreshed",
-            bucketKey,
-          }),
-        );
-      } catch (err) {
-        // Per-item try/catch — one bucket's EODHD failure must not abort the
-        // rest of the loop (mirrors audit-log-partition.worker.ts's pattern).
-        console.error(
-          JSON.stringify({
-            level: "error",
-            event: "universe-refresh.bucket-failed",
-            bucketKey,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      } finally {
-        await releaseBucketLock(bucketKey);
-      }
+    attemptedBuckets++;
+    try {
+      // Out-of-band triggers only ever fire from a full sweep — see file
+      // header for why a targeted run must not re-check/re-enqueue itself.
+      await refreshBucket(parentSector, marketCapTier, {
+        checkOutOfBandTriggers: !isTargetedRun,
+      });
+      succeededBuckets++;
+      console.log(
+        JSON.stringify({
+          level: "info",
+          event: "universe-refresh.bucket-refreshed",
+          bucketKey,
+        }),
+      );
+    } catch (err) {
+      // Per-item try/catch — one bucket's EODHD failure must not abort the
+      // rest of the loop (mirrors audit-log-partition.worker.ts's pattern).
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "universe-refresh.bucket-failed",
+          bucketKey,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    } finally {
+      await releaseBucketLock(bucketKey);
     }
   }
 
