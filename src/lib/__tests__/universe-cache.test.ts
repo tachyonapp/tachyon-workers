@@ -85,6 +85,7 @@ describe("writeBucket / readBucket", () => {
       symbols: [
         {
           symbol: "AAPL",
+          parentSector: "TECHNOLOGY",
           marketCapUsd: 3_000_000_000_000,
           avgDollarVolume: 9_500_000_000,
           resolvedSubSectors: ["Consumer Electronics"],
@@ -106,6 +107,7 @@ describe("writeBucket / readBucket", () => {
       symbols: [
         {
           symbol: "AAPL",
+          parentSector: "TECHNOLOGY",
           marketCapUsd: 3_000_000_000_000,
           avgDollarVolume: 9_500_000_000,
           resolvedSubSectors: ["Consumer Electronics"],

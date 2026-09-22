@@ -126,6 +126,8 @@ All queues use `removeOnComplete: { count: 100 }` and `removeOnFail: { count: 10
 | `EODHD_BREAKER_FAILURE_THRESHOLD` | No | `3` | Consecutive fully-failed `universe-refresh` **ticks** (not buckets) before the circuit breaker opens |
 | `EODHD_BREAKER_BACKOFF_SECONDS` | No | `300,900,1800` | Comma-separated capped exponential backoff schedule (seconds) applied once the breaker is open |
 | `EARNINGS_REFRESH_LOOKAHEAD_HOURS` | No | `24` | Window before a symbol's `nextEarningsDate` within which an extra, immediate out-of-band bucket refresh is triggered |
+| `UNIVERSE_FILTER_EARNINGS_STANDDOWN_WINDOW_DAYS` | No | `5` | Calendar days before `nextEarningsDate` within which `universe-filter-chain.ts` excludes a candidate for a `STAND_DOWN`-configured bot. **Distinct from** `EARNINGS_REFRESH_LOOKAHEAD_HOURS` above — that one triggers a data refresh (hours), this one is a trading-risk exclusion gate (days). See [Universe Filter Chain](#universe-filter-chain) |
+| `UNIVERSE_FILTER_SHORT_INTEREST_HIGH_THRESHOLD_PCT` | No | `20` | `shortInterestPct` threshold (percentage points) used by both `AVOID_HIGH_SHORT_INTEREST` (excludes above it) and `TARGET_SHORT_SQUEEZE` (requires strictly above it) in `universe-filter-chain.ts` |
 
 > `UNIVERSE_REFRESH_SLOW_TIER_SECONDS`, `SCAN_STALENESS_MAX_AGE_FAST_SECONDS`, `SCAN_STALENESS_MAX_AGE_SLOW_SECONDS`, `SLOW_TIER_DEGRADED_SERVE_SUSTAINED_THRESHOLD_SECONDS`, and `SLOW_TIER_DEGRADED_SERVE_OUTER_CAP_SECONDS` are already provisioned in `tachyon-infra`'s App Spec but are **not yet read by any code in this repo** — they're reserved for the staleness gate that wires into `scan-bot.worker.ts` (not yet built). Don't assume they do anything today.
 
@@ -214,6 +216,44 @@ Independent of the cron cadence: after a full sweep refreshes a bucket, if any s
 ### halt heuristic
 
 EODHD does offer real trading-status/halt data (a per-symbol WebSocket push stream), but it's a poor architectural fit for this worker's bulk, criteria-based, universe-wide screening design (the stream is capped at 50 symbol subscriptions by default). Full rationale is recorded in the Market Scanning & Universe Filtering TDD's Open Questions section, under "Halt heuristic's exact definition" — that document lives in the planning project, not in this repo. **Do not re-add a halt heuristic without reading that decision first.**
+
+---
+
+## Universe Filter Chain
+
+### What it is
+
+`universe-filter-chain.ts` (`runFilterChain()`) narrows the cached universe of candidate symbols down to what's actually eligible for one agents's configuration. It is **pure** — no network I/O, no Valkey/DB access. It takes an in-memory array of candidates (already read from the bucket cache by the caller) and a agents's settings/frame, and returns a filtered, reordered candidate list. `scan-bot.worker.ts` will be its only caller once wired up.
+
+### Why it is needed
+
+Universe Refresh populates the shared cache with every symbol matching a sector/market-cap bucket — hundreds of names per bucket. Each AI agent only wants the subset that matches its own configuration (sub-sectors, market-cap/liquidity tier, earnings posture, dividend preference, watchlist/exclusion lists, short-interest posture). This module is where that per-bot narrowing happens, entirely in-process against already-cached data — no per-agent EODHD or DB call.
+
+### Fixed stage order
+
+The 8 stages run in one fixed order, never reorderable by agent configuration, each its own separately named, separately testable function:
+
+```
+asset type → sector/sub-sector → market cap → liquidity →
+earnings exclusion → dividend preference → watchlist/exclusion → short-interest
+```
+
+1. **Asset type** — a documented pass-through today. `UniverseBucketSymbolEntry` has no `assetType` field; the bucket-fetch pipeline's GICS-sector-based EODHD Screener query structurally only returns individual equities (ETFs have no GICS sector and are excluded upstream by construction, not here). Kept as its own stage so the order stays self-evident in review and a future `assetType` field has an obvious place to plug in.
+2. **Sector/sub-sector** — a Tier A sub-sector selection matches candidates whose `resolvedSubSectors` contains the label. A **Tier B** selection (see `TIER_B_SUB_SECTORS`) matches by **parent sector only**, regardless of `resolvedSubSectors` — Tier B entries have an empty `resolvedSubSectors` by design (no `GICS_SUB_SECTOR_MAP` entry exists for them), so this stage never attempts a map lookup for a Tier B label. This is why `UniverseBucketSymbolEntry` carries a `parentSector` field (added alongside this task) — without it, there'd be no way to tell "correctly included from the right parent sector" apart from "wrongly included from an unrelated one."
+3. **Market cap** — keeps candidates within one of the frame's configured `marketCapTiers` bands, **and** always enforces `PLATFORM_LIMITS.minMarketCapUsd` underneath every frame, including `SURGE`. Band numbers live in `MARKET_CAP_TIER_USD_BANDS` (`tachyon-queue-types`) — the same shared constant `eodhd-client.ts` uses to build its EODHD query, so the two can never silently drift apart.
+4. **Liquidity** — same shape as market cap: frame's `LiquidityTier` minimum (`LIQUIDITY_TIER_MIN_ADV_USD`), floored by `PLATFORM_LIMITS.minAvgDollarVolumeUsd`.
+5. **Earnings exclusion** — see [`UNIVERSE_FILTER_EARNINGS_STANDDOWN_WINDOW_DAYS`](#environment-variables) above. Only `STAND_DOWN` excludes; `NEUTRAL`/`MORE_AGGRESSIVE` are no-ops at this stage. A candidate with an unknown `nextEarningsDate` is never excluded on a data gap.
+6. **Dividend preference** — `PREFER_DIVIDEND` requires a positive `dividendYield`; `EXCLUDE_DIVIDEND` requires none; `NO_PREFERENCE` is a no-op.
+7. **Watchlist/exclusion** — `exclusionList` tickers are dropped first, then `customWatchlist` tickers are moved to the front of the surviving list (FR8: prioritized *ahead of*, not merely included in, the rest). A watchlisted ticker is **not** exempt from any earlier stage — it only skips ahead in ordering if it already survived sectors/cap/liquidity/earnings/dividend filtering.
+8. **Short-interest** — see [`UNIVERSE_FILTER_SHORT_INTEREST_HIGH_THRESHOLD_PCT`](#environment-variables) above. `AVOID_HIGH_SHORT_INTEREST` excludes above the threshold (unknown data never excludes — can't penalize a vendor data gap); `TARGET_SHORT_SQUEEZE` requires *strictly above* the same threshold to be included at all (unknown data **does** exclude here — "can't confirm it meets the stated criteria," the opposite default from the avoid-gate, by design); `IGNORE` is a no-op. `shortInterestPct` is stored as a fraction (`0.05` = 5%, matching `dividendYield`'s convention) — the env var is expressed in percentage points and converted internally.
+
+### Two numeric decisions
+
+The earnings-exclusion window and the short-interest threshold both required a live product decision during implementation. Both decisions (and their full reasoning) are recorded in the Market Scanning & Universe Filtering TDD's Open Questions section — read that before changing either threshold.
+
+### Determinism
+
+Every function in this file must be a pure function of its inputs: no AI/ML calls, no adaptive/learned thresholds, no `brain-router.ts` calls. This is a hard constraint enforced by code review, not a style preference.
 
 ---
 
