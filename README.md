@@ -135,43 +135,51 @@ All queues use `removeOnComplete: { count: 100 }` and `removeOnFail: { count: 10
 
 ### What it is
 
-The `audit-log-partition` cron manages the monthly partitions of the `rule_audit_log` table. It runs at midnight UTC on the 25th of every month — six days before the next month begins — so the new partition is always in place before the first audit row of the month arrives.
+The `audit-log-partition` cron manages the monthly partitions of **two** range-partitioned tables — `rule_audit_log` (Deterministic Rule Engine evaluations) and `scan_audit_log` (market-scanning staleness-gate outcomes). It runs at midnight UTC on the 25th of every month — six days before the next month begins — so both tables' new partitions are always in place before the first row of the month arrives. One cron, one `Worker`, one job execution manages both tables sequentially; there is deliberately no second queue or cron registration for `scan_audit_log`.
 
 ### Why it is needed
 
-`rule_audit_log` is a range-partitioned PostgreSQL table that records every Deterministic Rule Engine evaluation. It is an immutable compliance artifact: rows can never be deleted by the application, and gaps in the log are a regulatory defect.
+`rule_audit_log` is an immutable compliance artifact: rows can never be deleted by the application, and gaps in the log are a regulatory defect. `scan_audit_log` is operational telemetry (staleness-gate/degraded-serve decisions from `scan-bot.worker.ts`) with no legal retention mandate — different compliance domain, different volume profile, different schema, tracked in its own table from day one (migration `016_market_scanning_universe_filtering.sql`) rather than folded into `rule_audit_log`.
 
-Partition management is required for two reasons:
+Partition management is required for both tables for two reasons:
 
-1. **Query performance.** Without pre-created partitions, new rows fall into the `rule_audit_log_default` partition, which is unoptimized for indexed queries. Monthly partitions allow PostgreSQL to prune irrelevant partitions during queries, keeping reads fast as the table grows.
+1. **Query performance.** Without pre-created partitions, new rows fall into the table's `_default` partition, which is unoptimized for indexed queries. Monthly partitions allow PostgreSQL to prune irrelevant partitions during queries, keeping reads fast as each table grows.
 
-2. **Regulatory retention lifecycle.** Financial compliance regulations (GDPR/CCPA, RIA audit obligations) require that records are queryable for a minimum window and permanently deleted after the maximum retention period expires. The cron enforces this automatically:
-   - **0–24 months:** partition is attached and fully queryable
-   - **24 months–5 years:** partition is detached (`DETACH PARTITION CONCURRENTLY`) — invisible to active queries but reattachable within 4 business hours for regulatory examination
-   - **Beyond 5 years:** partition is dropped (`DROP TABLE`) — permanent deletion as required after the retention window closes
+2. **Retention lifecycle**, enforced automatically by the cron — but on **different schedules per table**:
+
+   | | `rule_audit_log` | `scan_audit_log` |
+   |---|---|---|
+   | Attached / fully queryable | 0–24 months | 0–6 months |
+   | Detached (`DETACH PARTITION CONCURRENTLY`) | 24 months–5 years | 6–12 months |
+   | Dropped (`DROP TABLE`) | beyond 5 years | beyond 12 months |
+   | `REVOKE DELETE` on new partitions | Yes — GDPR/CCPA/RIA-mandated immutability | **No** — operational telemetry, no retention mandate |
+
+   `rule_audit_log`'s 24-month/5-year cutoffs are the original, unchanged compliance-driven numbers. `scan_audit_log`'s 6-month/12-month cutoffs are **placeholders pending final confirmation** (TDD Open Questions) — trivially adjustable via the `SCAN_AUDIT_DETACH_MONTHS`/`SCAN_AUDIT_DROP_MONTHS` constants in `audit-log-partition.worker.ts`, not hardcoded magic numbers scattered through the file.
 
 ### How it works
 
-On each run the worker:
+The worker is generalized around a small `AuditPartitionTableConfig` (table name, partition prefix/regex, detach/drop month cutoffs, and a `revokeDelete` flag) so the same create/detach/drop logic runs once per table rather than being duplicated. Each run processes `rule_audit_log` first, then `scan_audit_log`, each producing its own `audit-log-partition.started`/`.completed` log pair tagged with a `table` field:
 
-1. **Creates the next month's partition** — `CREATE TABLE IF NOT EXISTS rule_audit_log_YYYY_MM PARTITION OF rule_audit_log FOR VALUES FROM ('YYYY-MM-01') TO ('YYYY-MM+1-01')`. Idempotent: if the partition already exists the step is skipped.
-2. **Revokes DELETE on the new partition** — `REVOKE DELETE ON rule_audit_log_YYYY_MM FROM tachyon_app`. Enforces the append-only compliance requirement on every new partition. Idempotent: safe to re-run.
-3. **Detaches old partitions** — for any partition whose month is ≥ 24 months in the past and is still attached, runs `ALTER TABLE rule_audit_log DETACH PARTITION ... CONCURRENTLY`. This must execute outside a transaction block; the worker does not wrap it in one.
-4. **Drops expired partitions** — for any partition whose month is ≥ 60 months (5 years) in the past, runs `DROP TABLE IF EXISTS rule_audit_log_YYYY_MM`. This permanently removes the data in compliance with the post-retention-window deletion requirement.
+1. **Creates the next month's partition** — `CREATE TABLE IF NOT EXISTS <table>_YYYY_MM PARTITION OF <table> FOR VALUES FROM ('YYYY-MM-01') TO ('YYYY-MM+1-01')`. Idempotent: if the partition already exists the step is skipped.
+2. **Revokes DELETE on the new partition — `rule_audit_log` only.** `REVOKE DELETE ON rule_audit_log_YYYY_MM FROM tachyon_app`, gated behind the config's `revokeDelete` flag. `scan_audit_log` partitions deliberately skip this step entirely — the flag exists specifically so this can't be accidentally copy-pasted back in when the two tables' logic was merged into one file.
+3. **Detaches old partitions** — for any partition of that table whose month is past its own `detachMonths` cutoff and is still attached, runs `ALTER TABLE <table> DETACH PARTITION ... CONCURRENTLY`. This must execute outside a transaction block; the worker does not wrap it in one.
+4. **Drops expired partitions** — for any partition of that table whose month is past its own `dropMonths` cutoff, runs `DROP TABLE IF EXISTS <table>_YYYY_MM`. This permanently removes the data.
 
-Each DDL step is independently wrapped in try/catch. Detach and drop failures are non-fatal and are logged with Sentry capture — a transient failure on one step or one partition does not abort the rest of the run. BullMQ will retry the job up to 3 times with exponential backoff on a hard failure.
+Each DDL step is independently wrapped in try/catch. Detach and drop failures are non-fatal and are logged with Sentry capture — a transient failure on one step or one partition does not abort the rest of the run (for either table). BullMQ will retry the job up to 3 times with exponential backoff on a hard failure. A failure processing `rule_audit_log`'s create/revoke step aborts before `scan_audit_log` is attempted, since both currently run in the same job invocation.
 
 ### Compliance note
 
-The `REVOKE DELETE` step in item 2 above is a compliance control, not just a best-effort setting. Every new partition must have DELETE revoked before any rows are written to it. The worker applies this immediately after creating each partition. If the cron is delayed or skipped, rows for the new month route to `rule_audit_log_default` (no data loss), but the default partition may not have DELETE revoked — see the task notes for USER-02 in the Feature 9 dev tasks for context.
+The `REVOKE DELETE` step applies **only to `rule_audit_log`**. Every new `rule_audit_log` partition must have DELETE revoked before any rows are written to it; the worker applies this immediately after creating each partition. If the cron is delayed or skipped, rows for the new month route to `rule_audit_log_default` (no data loss), but the default partition may not have DELETE revoked — see the task notes for USER-02 in the Feature 9 dev tasks for context. `scan_audit_log` has no equivalent control by design — `tachyon_app` retains DELETE on it in every partition, including the default.
 
 ### Reattaching a detached partition
 
-If a detached partition must be made queryable for a regulatory examination or audit, follow the runbook:
+If a detached `rule_audit_log` partition must be made queryable for a regulatory examination or audit, follow the runbook:
 
 > [`tachyon-infra/runbooks/rule-audit-log-partition-reattachment.md`](../tachyon-infra/runbooks/rule-audit-log-partition-reattachment.md)
 
 **SLA: 4 business hours** from request to partition reattached and queryable.
+
+There is no equivalent SLA or runbook for `scan_audit_log` — it is operational telemetry, not a compliance record, so a detached partition can be reattached ad hoc (`ALTER TABLE scan_audit_log ATTACH PARTITION scan_audit_log_YYYY_MM FOR VALUES FROM (...) TO (...)`) without a formal process.
 
 ---
 
