@@ -10,7 +10,9 @@
     "test:unit": "jest --detectOpenHandles --testPathIgnorePatterns=integration",
     "test:integration": "jest --detectOpenHandles --testPathPattern=integration",
     "lint": "eslint src/",
-    "queue:clean": "npx tsx scripts/queue-clean.ts"
+    "queue:clean": "npx tsx scripts/queue-clean.ts",
+    "dev:trigger-universe-refresh": "tsx scripts/trigger-universe-refresh.ts",
+    "dev:trigger-scan-bot": "tsx scripts/trigger-scan-bot.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
