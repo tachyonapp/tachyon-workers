@@ -257,6 +257,48 @@ Every function in this file must be a pure function of its inputs: no AI/ML call
 
 ---
 
+## Scan Bot Pipeline (Staleness Gate)
+
+### What it is
+
+`scan-bot.worker.ts` processes one agent per job (enqueued by `scan-dispatch`). After its three guard checks pass (agent ownership/ACTIVE check, broker connection, subscription-tier cap — all unchanged), it resolves the agents's relevant universe bucket(s), applies session/day narrowing, runs the staleness gate against the bucket cache, and on anything but a skip, runs it through [Universe Filter Chain](#universe-filter-chain) and logs the resulting candidate list at the point Feature 11 (scoring/proposal construction, not yet built) will eventually consume it.
+
+### Session/day narrowing — no audit row
+
+Before the staleness gate runs at all, `session_preference`/`day_avoidance` are checked against the current time (`session-preference.ts`). If the agent's preference excludes right now, the job returns immediately — **no `scan_audit_log` row is written**. This is deliberately separate from the staleness path below: it's an agent-preference narrowing, not a data-quality event, so it must stay invisible to the audit trail.
+
+### The staleness gate — four outcomes, always exactly one audit row
+
+`staleness-gate.ts`'s `evaluateStalenessGate()` is the one place an agent's scan decides whether cached data is fresh enough to trade on. Every evaluation writes exactly one `scan_audit_log` row, in every branch:
+
+| Outcome | Meaning |
+|---|---|
+| `PASS` | Cached data is within its staleness threshold. No network call. |
+| `BOUNDED_REFRESH_SUCCESS` | Cache was stale; one bounded synchronous refresh succeeded within its own timeout (`SCAN_BOUNDED_REFRESH_TIMEOUT_MS`). |
+| `SKIPPED` | Stale and unrefreshable. For FAST-tier data this is absolute — no breaker state or condition ever produces an exception. |
+| `SLOW_TIER_DEGRADED_SERVE` | SLOW-tier only: the circuit breaker has been open past `SLOW_TIER_DEGRADED_SERVE_SUSTAINED_THRESHOLD_SECONDS` and the cached data is still within `SLOW_TIER_DEGRADED_SERVE_OUTER_CAP_SECONDS` — last-known-good data is served as a narrow, audited exception. |
+
+An agent's relevant buckets can span more than one `(parentSector, marketCapTier)` pair (a frame with several market-cap tiers, sub-sectors spanning multiple parent sectors, or no sub-sector restriction at all). The gate evaluates every relevant bucket and aggregates to one outcome via the most protective rule: if **any** bucket ends up `SKIPPED`, the whole evaluation is `SKIPPED` and every candidate is discarded — a list built from a mix of fresh and unrefreshably-stale data isn't served just because some other bucket happened to be fine. Short of a full skip, the least-fresh outcome wins, so the single audit row reflects the worst case actually encountered.
+
+FAST-tier vs. SLOW-tier: `universe-refresh.worker.ts`'s current MVP simplification (see [Universe Refresh](#universe-refresh-market-scanning)) writes every bucket as `"FAST"` — there is no live path producing a `"SLOW"` cached entry today. The degraded-serve branch is fully implemented and tested against a constructed `"SLOW"` fixture, so it's correct the moment per-field cadence gating is reintroduced; it just isn't reachable via the live system yet.
+
+### Why scan-bot.worker.ts never imports eodhd-client.ts — and why that's not defeated by the bounded refresh
+
+`eodhd-client.ts` has exactly one importer in this codebase: `bucket-fetch.ts`. `scan-bot.worker.ts` reaches it only indirectly, through `staleness-gate.ts`'s bounded-refresh path. It's worth being precise about what this rule actually protects, because a literal reading ("scan-bot's call graph must never reach EODHD, even transitively") doesn't survive contact with the rest of the design — NFR7 itself *requires* a bounded synchronous refresh as part of the staleness gate, so "zero EODHD calls under any circumstance" was never the real constraint.
+
+What the rule actually guards against is the anti-pattern Feature 10 exists to eliminate: EODHD call volume scaling with active-bot count instead of staying bounded to ~44 buckets per cadence tick (NFR2). If `scan-bot.worker.ts` could freely, independently call EODHD per bot with no coordination, that scaling problem comes right back — just moved one layer down. The import-boundary rule ("never import `eodhd-client.ts` directly") is a cheap, `grep`-able proxy for catching that failure mode in review, not the goal itself.
+
+What actually matters is preserved because the bounded refresh goes through the *same shared discipline* `universe-refresh.worker.ts` uses, not an ad hoc one:
+
+1. **Bucket-scoped, not bot-scoped** — keyed by `(parentSector, marketCapTier)`, the same key the full sweep uses. Bots with overlapping frame/sector selections share buckets.
+2. **Single-flight locking still applies** — `acquireBucketLock()` is the identical lock. Two bots hitting the same stale bucket at once do not produce two concurrent EODHD calls; only one acquires the lock, the other is treated as a failed attempt.
+3. **Writes back to the shared cache** — `writeBucket()` runs on a successful bounded refresh, so the bot that triggered it benefits every other bot sharing that bucket for the rest of its freshness window, not just itself.
+4. **One bounded attempt, then a hard stop** — the same "try once, give up" discipline NFR7 mandates everywhere else, capped by its own timeout distinct from the full sweep's cadence.
+
+If the bounded refresh instead bypassed the lock, called EODHD per-bot, or didn't write back to the shared cache, *that* would be the anti-pattern in a thin disguise. None of that is the case — which is why the rule's real intent (bounded, coordinated, shared EODHD access) holds, even though its literal wording is satisfied by "one hop removed" rather than by `scan-bot.worker.ts`'s call graph never reaching `eodhd-client.ts` at all.
+
+---
+
 ## Queue Maintenance
 
 `queue:clean` is a **break-glass utility** — not a routine scheduled task. The per-queue `removeOnComplete`/`removeOnFail` retention limits handle day-to-day cleanup automatically.

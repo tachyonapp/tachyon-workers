@@ -11,9 +11,8 @@ jest.mock("@sentry/node", () => ({
   captureException: jest.fn(),
 }));
 
-jest.mock("../../lib/eodhd-client", () => ({
-  fetchScreenerBucket: jest.fn(),
-  fetchFundamentals: jest.fn(),
+jest.mock("../../lib/bucket-fetch", () => ({
+  fetchBucketSymbols: jest.fn(),
 }));
 
 jest.mock("../../lib/universe-cache", () => ({
@@ -41,7 +40,7 @@ import {
 } from "@tachyonapp/tachyon-queue-types";
 import type { UniverseRefreshJobPayload } from "@tachyonapp/tachyon-queue-types";
 import { processUniverseRefresh } from "../universe-refresh.worker";
-import * as eodhdClient from "../../lib/eodhd-client";
+import * as bucketFetch from "../../lib/bucket-fetch";
 import * as universeCache from "../../lib/universe-cache";
 import { universeRefreshQueue } from "../../queues/universe-refresh.queue";
 
@@ -54,8 +53,7 @@ function makeJob(targetBucketKey?: string): Job<UniverseRefreshJobPayload> {
   } as Job<UniverseRefreshJobPayload>;
 }
 
-const mockedFetchScreenerBucket = eodhdClient.fetchScreenerBucket as jest.Mock;
-const mockedFetchFundamentals = eodhdClient.fetchFundamentals as jest.Mock;
+const mockedFetchBucketSymbols = bucketFetch.fetchBucketSymbols as jest.Mock;
 const mockedReadBreakerState = universeCache.readBreakerState as jest.Mock;
 const mockedRecordRefreshSuccess =
   universeCache.recordRefreshSuccess as jest.Mock;
@@ -81,21 +79,17 @@ describe("processUniverseRefresh", () => {
     process.env = { ...originalEnv, UNIVERSE_REFRESH_ENABLED: "true" };
     mockedAcquireBucketLock.mockResolvedValue(true);
     mockedReadBreakerState.mockResolvedValue(CLOSED_BREAKER);
-    mockedFetchScreenerBucket.mockResolvedValue([
+    mockedFetchBucketSymbols.mockResolvedValue([
       {
         symbol: "AAPL",
-        gicsSubIndustry: "Consumer Electronics",
+        parentSector: "Technology",
         marketCapUsd: 3_000_000_000_000,
         avgDollarVolume: 9_000_000_000,
-        price: 190,
-      },
-    ]);
-    mockedFetchFundamentals.mockResolvedValue([
-      {
-        symbol: "AAPL",
+        resolvedSubSectors: ["Consumer Electronics"],
         dividendYield: 0.005,
         shortInterestPct: 0.01,
         nextEarningsDate: null, // no-trigger by default; DEV-9 tests override this
+        price: 190,
       },
     ]);
   });
@@ -110,7 +104,7 @@ describe("processUniverseRefresh", () => {
     await processUniverseRefresh(makeJob());
 
     expect(mockedReadBreakerState).not.toHaveBeenCalled();
-    expect(mockedFetchScreenerBucket).not.toHaveBeenCalled();
+    expect(mockedFetchBucketSymbols).not.toHaveBeenCalled();
   });
 
   it("skips the entire tick with zero EODHD calls when the breaker is OPEN and backoff hasn't elapsed", async () => {
@@ -124,20 +118,20 @@ describe("processUniverseRefresh", () => {
 
     await processUniverseRefresh(makeJob());
 
-    expect(mockedFetchScreenerBucket).not.toHaveBeenCalled();
+    expect(mockedFetchBucketSymbols).not.toHaveBeenCalled();
     expect(mockedAcquireBucketLock).not.toHaveBeenCalled();
   });
 
   it("attempts every bucket, writes each one, and records a single aggregate success when all succeed", async () => {
     await processUniverseRefresh(makeJob());
 
-    expect(mockedFetchScreenerBucket).toHaveBeenCalledTimes(TOTAL_BUCKETS);
+    expect(mockedFetchBucketSymbols).toHaveBeenCalledTimes(TOTAL_BUCKETS);
     expect(mockedWriteBucket).toHaveBeenCalledTimes(TOTAL_BUCKETS);
     expect(mockedRecordRefreshSuccess).toHaveBeenCalledTimes(1);
     expect(mockedRecordRefreshFailure).not.toHaveBeenCalled();
   });
 
-  it("resolves the raw GICS sub-industry to a Tachyon label via GICS_SUB_SECTOR_MAP", async () => {
+  it("writes the resolvedSubSectors bucket-fetch already resolved, without re-deriving them", async () => {
     await processUniverseRefresh(makeJob());
 
     const firstWriteArg = mockedWriteBucket.mock.calls[0][0];
@@ -146,35 +140,17 @@ describe("processUniverseRefresh", () => {
     ]);
   });
 
-  it("resolves to an empty array when the raw GICS sub-industry has no map entry", async () => {
-    mockedFetchScreenerBucket.mockResolvedValue([
-      {
-        symbol: "UNKNOWNCO",
-        gicsSubIndustry: "Some Unmapped GICS Sub-Industry",
-        marketCapUsd: 5_000_000_000,
-        avgDollarVolume: 100_000_000,
-        price: 50,
-      },
-    ]);
-    mockedFetchFundamentals.mockResolvedValue([]);
-
-    await processUniverseRefresh(makeJob());
-
-    const firstWriteArg = mockedWriteBucket.mock.calls[0][0];
-    expect(firstWriteArg.symbols[0].resolvedSubSectors).toEqual([]);
-  });
-
   it("skips a bucket already locked by another process without counting it as an attempt", async () => {
     mockedAcquireBucketLock.mockResolvedValueOnce(false); // first bucket only
 
     await processUniverseRefresh(makeJob());
 
-    expect(mockedFetchScreenerBucket).toHaveBeenCalledTimes(TOTAL_BUCKETS - 1);
+    expect(mockedFetchBucketSymbols).toHaveBeenCalledTimes(TOTAL_BUCKETS - 1);
     expect(mockedRecordRefreshSuccess).toHaveBeenCalledTimes(1);
   });
 
   it("records an aggregate success (not failure) when only some buckets fail", async () => {
-    mockedFetchScreenerBucket.mockRejectedValueOnce(
+    mockedFetchBucketSymbols.mockRejectedValueOnce(
       new Error("EODHD rate limited"),
     );
 
@@ -187,7 +163,7 @@ describe("processUniverseRefresh", () => {
   });
 
   it("records an aggregate failure once when every attempted bucket fails, without opening the breaker below threshold", async () => {
-    mockedFetchScreenerBucket.mockRejectedValue(new Error("EODHD unreachable"));
+    mockedFetchBucketSymbols.mockRejectedValue(new Error("EODHD unreachable"));
     mockedRecordRefreshFailure.mockResolvedValue({ justOpened: false });
 
     await processUniverseRefresh(makeJob());
@@ -198,7 +174,7 @@ describe("processUniverseRefresh", () => {
   });
 
   it("fires exactly one Sentry alert with the eodhd_outage_sustained fingerprint when the breaker just opened", async () => {
-    mockedFetchScreenerBucket.mockRejectedValue(new Error("EODHD unreachable"));
+    mockedFetchBucketSymbols.mockRejectedValue(new Error("EODHD unreachable"));
     mockedRecordRefreshFailure.mockResolvedValue({ justOpened: true });
 
     await processUniverseRefresh(makeJob());
@@ -225,21 +201,17 @@ describe("processUniverseRefresh — out-of-band earnings trigger (DEV-9)", () =
     // Non-triggering baseline for every bucket — individual tests override
     // just the FIRST call (mockResolvedValueOnce) so only one of the 44
     // buckets in a full sweep is expected to trigger, keeping assertions exact.
-    mockedFetchScreenerBucket.mockResolvedValue([
+    mockedFetchBucketSymbols.mockResolvedValue([
       {
         symbol: "AAPL",
-        gicsSubIndustry: "Consumer Electronics",
+        parentSector: "Technology",
         marketCapUsd: 3_000_000_000_000,
         avgDollarVolume: 9_000_000_000,
-        price: 190,
-      },
-    ]);
-    mockedFetchFundamentals.mockResolvedValue([
-      {
-        symbol: "AAPL",
+        resolvedSubSectors: ["Consumer Electronics"],
         dividendYield: null,
         shortInterestPct: null,
         nextEarningsDate: null,
+        price: 190,
       },
     ]);
   });
@@ -250,14 +222,19 @@ describe("processUniverseRefresh — out-of-band earnings trigger (DEV-9)", () =
 
   it("enqueues an out-of-band refresh when a symbol's nextEarningsDate is inside the lookahead window", async () => {
     process.env.EARNINGS_REFRESH_LOOKAHEAD_HOURS = "24";
-    mockedFetchFundamentals.mockResolvedValueOnce([
+    mockedFetchBucketSymbols.mockResolvedValueOnce([
       {
         symbol: "AAPL",
+        parentSector: "Technology",
+        marketCapUsd: 3_000_000_000_000,
+        avgDollarVolume: 9_000_000_000,
+        resolvedSubSectors: ["Consumer Electronics"],
         dividendYield: null,
         shortInterestPct: null,
         nextEarningsDate: new Date(
           Date.now() + 12 * 60 * 60 * 1000,
         ).toISOString(),
+        price: 190,
       },
     ]);
 
@@ -270,14 +247,19 @@ describe("processUniverseRefresh — out-of-band earnings trigger (DEV-9)", () =
 
   it("does not enqueue an out-of-band refresh when nextEarningsDate is outside the lookahead window", async () => {
     process.env.EARNINGS_REFRESH_LOOKAHEAD_HOURS = "24";
-    mockedFetchFundamentals.mockResolvedValueOnce([
+    mockedFetchBucketSymbols.mockResolvedValueOnce([
       {
         symbol: "AAPL",
+        parentSector: "Technology",
+        marketCapUsd: 3_000_000_000_000,
+        avgDollarVolume: 9_000_000_000,
+        resolvedSubSectors: ["Consumer Electronics"],
         dividendYield: null,
         shortInterestPct: null,
         nextEarningsDate: new Date(
           Date.now() + 30 * 24 * 60 * 60 * 1000,
         ).toISOString(),
+        price: 190,
       },
     ]);
 
@@ -287,15 +269,20 @@ describe("processUniverseRefresh — out-of-band earnings trigger (DEV-9)", () =
   });
 
   it("never runs the earnings check or enqueues anything during a targeted (out-of-band) run — prevents an infinite self-triggering loop", async () => {
-    mockedFetchFundamentals.mockResolvedValue([
+    mockedFetchBucketSymbols.mockResolvedValue([
       {
         symbol: "AAPL",
+        parentSector: "Technology",
+        marketCapUsd: 3_000_000_000_000,
+        avgDollarVolume: 9_000_000_000,
+        resolvedSubSectors: ["Consumer Electronics"],
         dividendYield: null,
         shortInterestPct: null,
         // Still imminent — if the guard were missing, this would re-enqueue itself forever.
         nextEarningsDate: new Date(
           Date.now() + 1 * 60 * 60 * 1000,
         ).toISOString(),
+        price: 190,
       },
     ]);
 
@@ -307,10 +294,10 @@ describe("processUniverseRefresh — out-of-band earnings trigger (DEV-9)", () =
   it("a targeted run only processes the one specified bucket, not the full universe", async () => {
     await processUniverseRefresh(makeJob("Technology:MEGA_CAP"));
 
-    expect(mockedFetchScreenerBucket).toHaveBeenCalledTimes(1);
-    expect(mockedFetchScreenerBucket).toHaveBeenCalledWith({
-      parentSector: "Technology",
-      marketCapTier: "MEGA_CAP",
-    });
+    expect(mockedFetchBucketSymbols).toHaveBeenCalledTimes(1);
+    expect(mockedFetchBucketSymbols).toHaveBeenCalledWith(
+      "Technology",
+      "MEGA_CAP",
+    );
   });
 });
