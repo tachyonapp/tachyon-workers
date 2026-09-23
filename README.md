@@ -206,6 +206,22 @@ On each tick, the worker:
 
 **MVP simplification:** the TDD describes independent FAST/SLOW refresh cadences per field (price vs. fundamentals). `UniverseBucketCacheEntry` only carries one `tier` per bucket, so every bucket write today is gated by the single `UNIVERSE_REFRESH_FAST_TIER_SECONDS` interval — fundamentals refresh exactly as often as price does, not on a separate slower cadence. `UNIVERSE_REFRESH_SLOW_TIER_SECONDS` is provisioned in the App Spec but unused until a future change reintroduces true per-field gating.
 
+**Data fidelity tradeoff:** `shortInterestPct` comes from EODHD's Fundamentals `SharesStats.ShortPercentFloat` field, not a dedicated short-interest vendor. This is lower-fidelity (less frequently updated, float-based rather than a true short-interest-ratio feed) — accepted as sufficient for MVP, rather than paying for a second data source. If short-interest-driven filtering (`TARGET_SHORT_SQUEEZE`/`AVOID_HIGH_SHORT_INTEREST`, see [Universe Filter Chain](#universe-filter-chain)) proves too noisy in practice, this is the first place to look. 
+
+TODO:: Find and implement a true short-interest-ratio feed post-MVP.
+
+### Bucket Cache
+
+All Valkey state for this feature lives under three key patterns, constructed **only** by `universe-cache.ts` — no other file hand-builds one of these strings:
+
+| Key pattern | Type | TTL | Written by | Read by |
+|---|---|---|---|---|
+| `universe:bucket:<parentSector>:<marketCapTier>` | Hash (`asOf`, `expiresAt`, `tier`, `payload`) | None | `universe-refresh.worker.ts` | `scan-bot.worker.ts`'s staleness gate |
+| `universe:breaker` | Hash (`state`, `consecutiveFailures`, `openedAt`, `nextRetryAt`, `lastSuccessAt`) | None | `universe-refresh.worker.ts` | Both workers |
+| `universe:lock:<bucketKey>` | String (single-flight lock) | Short (a few seconds past expected EODHD round-trip) | Both workers | Both workers |
+
+**Why no TTL on the bucket/breaker hashes:** freshness for bucket data is enforced by the staleness gate comparing the hash's own `asOf`/`expiresAt` fields against wall-clock time at read time — not by the key disappearing. The breaker hash has no TTL for a different reason: a worker restart mid-outage must not silently reset `consecutiveFailures`/`state` back to `CLOSED`, which a TTL-based expiry would risk. The lock key is the one deliberate exception — its short TTL exists purely so a crashed worker can't hold a bucket lock forever.
+
 ### Circuit breaker — per-tick, not per-bucket
 
 The breaker (`universe-cache.ts`'s `recordRefreshSuccess`/`recordRefreshFailure`) is updated **once per tick**, based on the tick's aggregate outcome across all attempted buckets — not once per bucket:
@@ -304,6 +320,24 @@ What actually matters is preserved because the bounded refresh goes through the 
 4. **One bounded attempt, then a hard stop** — the same "try once, give up" discipline NFR7 mandates everywhere else, capped by its own timeout distinct from the full sweep's cadence.
 
 If the bounded refresh instead bypassed the lock, called EODHD per-bot, or didn't write back to the shared cache, *that* would be the anti-pattern in a thin disguise. None of that is the case — which is why the rule's real intent (bounded, coordinated, shared EODHD access) holds, even though its literal wording is satisfied by "one hop removed" rather than by `scan-bot.worker.ts`'s call graph never reaching `eodhd-client.ts` at all.
+
+---
+
+## Manual Trigger Scripts
+
+Two `tsx` scripts enqueue a single job outside the normal cron/dispatch cadence, for local dev and staging debugging. Neither bypasses any guard the target worker already has — they only call `queue.add()`, exactly as the real cron/dispatcher would for one job.
+
+```bash
+npm run dev:trigger-universe-refresh
+npm run dev:trigger-scan-bot -- --botId <id> --userId <id>
+```
+
+| Script | Enqueues | Use it when |
+|---|---|---|
+| `trigger-universe-refresh` | One `universe-refresh` job (full sweep, all buckets) | You want to populate the Valkey bucket cache on demand — outside market hours, without waiting up to ~5 min for the next cron tick, or before `UNIVERSE_REFRESH_ENABLED` is flipped on in an environment |
+| `trigger-scan-bot` | One `scan-bot` job for a specific bot | You're debugging one bot's staleness-gate/filter-chain behavior and don't want the rest of the active-bot fleet's jobs mixed into the same `scan-dispatch` tick |
+
+Both require `docker compose up postgres valkey` (from `tachyon-infra`) and the worker process (`npm run dev`) already running — the scripts only enqueue; the running worker process is what actually picks up and processes the job.
 
 ---
 
