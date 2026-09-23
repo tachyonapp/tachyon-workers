@@ -12,6 +12,7 @@ import {
 } from "@tachyonapp/tachyon-queue-types";
 import {
   runFilterChain,
+  resolveRelevantParentSectors,
   type FilterChainInput,
 } from "../universe-filter-chain";
 
@@ -424,6 +425,34 @@ describe("Full-chain integration — one per frame archetype", () => {
       expect(result.candidates.map((c) => c.symbol)).toEqual(["ELIGIBLE"]);
     },
   );
+});
+
+describe("resolveRelevantParentSectors", () => {
+  it("returns every parent sector when subSectors is empty", () => {
+    expect(resolveRelevantParentSectors([])).toEqual(
+      expect.arrayContaining(["Technology", "Energy", "Healthcare"]),
+    );
+  });
+
+  it("resolves a Tier A label to its single parent sector", () => {
+    expect(resolveRelevantParentSectors(["Software & SaaS"])).toEqual(["Technology"]);
+  });
+
+  it("resolves a Tier B label to its parent sector, same as Tier A", () => {
+    expect(resolveRelevantParentSectors(["AI & Machine Learning"])).toEqual(["Technology"]);
+  });
+
+  it("deduplicates when multiple labels share a parent sector", () => {
+    expect(
+      resolveRelevantParentSectors(["Software & SaaS", "Semiconductors & Chips"]),
+    ).toEqual(["Technology"]);
+  });
+
+  it("returns multiple parent sectors when labels span more than one", () => {
+    expect(
+      resolveRelevantParentSectors(["Software & SaaS", "Oil & Gas"]).sort(),
+    ).toEqual(["Energy", "Technology"]);
+  });
 });
 
 describe("runFilterChain output shape", () => {

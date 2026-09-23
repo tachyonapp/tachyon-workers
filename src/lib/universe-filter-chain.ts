@@ -99,6 +99,35 @@ function resolveParentSector(subSectorLabel: string): string | undefined {
     ?.parentSector;
 }
 
+/**
+ * Which ALLOWED_SECTORS parent sectors an agent's sub_sectors selection
+ * touches — used by scan-bot.worker.ts to resolve which
+ * (parentSector × marketCapTier) bucket(s) to read/refresh, BEFORE any
+ * candidate data exists to filter.
+ *
+ * Exported (rather than reimplemented in
+ * scan-bot.worker.ts) so there's one Tier A/Tier B parent-sector resolution
+ * rule in the codebase, not two that could silently drift apart
+ *
+ * Empty subSectors means no sector restriction — every parent sector is
+ * relevant, mirroring filterSectorSubSector's own pass-through for that case.
+ */
+export function resolveRelevantParentSectors(subSectors: string[]): string[] {
+  if (subSectors.length === 0) {
+    return ALLOWED_SECTORS.map((s) => s.parentSector);
+  }
+
+  // Tier B labels are physically listed under a parent sector in
+  // ALLOWED_SECTORS too (just absent from GICS_SUB_SECTOR_MAP), so the same
+  // lookup resolves both Tier A and Tier B labels — no tier branching needed here.
+  const parentSectors = new Set<string>();
+  for (const label of subSectors) {
+    const parentSector = resolveParentSector(label);
+    if (parentSector) parentSectors.add(parentSector);
+  }
+  return [...parentSectors];
+}
+
 function filterSectorSubSector(
   candidates: UniverseBucketSymbolEntry[],
   subSectors: string[],

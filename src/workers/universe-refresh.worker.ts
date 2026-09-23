@@ -25,13 +25,12 @@ import {
   QUEUE_NAMES,
   MarketCapTier,
   ALLOWED_SECTORS,
-  GICS_SUB_SECTOR_MAP,
   type UniverseRefreshJobPayload,
   type UniverseBucketSymbolEntry,
 } from "@tachyonapp/tachyon-queue-types";
 import { getBullMQConnectionOptions } from "../connection";
 import { universeRefreshQueue } from "../queues/universe-refresh.queue";
-import { fetchScreenerBucket, fetchFundamentals } from "../lib/eodhd-client";
+import { fetchBucketSymbols } from "../lib/bucket-fetch";
 import {
   bucketCacheKey,
   writeBucket,
@@ -118,31 +117,10 @@ async function refreshBucket(
 ): Promise<void> {
   const bucketKey = bucketCacheKey(parentSector, marketCapTier);
 
-  const screenerResults = await fetchScreenerBucket({
+  const symbols: UniverseBucketSymbolEntry[] = await fetchBucketSymbols(
     parentSector,
     marketCapTier,
-  });
-  const fundamentals = await fetchFundamentals(
-    screenerResults.map((r) => r.symbol),
   );
-  const fundamentalsBySymbol = new Map(fundamentals.map((f) => [f.symbol, f]));
-
-  const symbols: UniverseBucketSymbolEntry[] = screenerResults.map((r) => {
-    const fund = fundamentalsBySymbol.get(r.symbol);
-    // No map entry (Tier B / unclassified) resolves to an empty array, not an error.
-    const resolvedLabel = GICS_SUB_SECTOR_MAP[r.gicsSubIndustry];
-    return {
-      symbol: r.symbol,
-      parentSector,
-      marketCapUsd: r.marketCapUsd,
-      avgDollarVolume: r.avgDollarVolume,
-      resolvedSubSectors: resolvedLabel ? [resolvedLabel] : [],
-      dividendYield: fund?.dividendYield ?? null,
-      shortInterestPct: fund?.shortInterestPct ?? null,
-      nextEarningsDate: fund?.nextEarningsDate ?? null,
-      price: r.price,
-    };
-  });
 
   const asOf = new Date();
   const expiresAt = new Date(asOf.getTime() + getFastTierSeconds() * 1000);
